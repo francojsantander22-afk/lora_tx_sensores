@@ -356,7 +356,7 @@ static void OnTxDone(void) {
 
 	/* CAMBIO AQUÍ: Seteamos estado RX y abrimos ventana de escucha en la radio */
 	State = RX;
-	Radio.Rx(RX_TIMEOUT_VALUE);
+	//Radio.Rx(RX_TIMEOUT_VALUE);
 
 	/* Ejecutamos el proceso en el secuenciador */
 	UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process),
@@ -510,14 +510,13 @@ static void PingPong_Process(void)  //funcion de tx del rak
 			memcpy(BufferTx, lora_tx_buffer, lora_tx_len);
 			Radio.Send(BufferTx, lora_tx_len);
 			tlv_ready = 0; /* consumido */
-		} else {
+		} //else {
 			/* Todavía no hay paquete nuevo — esperar y reintentar */
-			APP_LOG(TS_ON, VLEVEL_L, "TX: Esperando paquete TLV...\n\r");
-			HAL_Delay(100);
-			UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process),
-					CFG_SEQ_Prio_0);
+			//APP_LOG(TS_ON, VLEVEL_L, "TX: Esperando paquete TLV...\n\r");
+			//HAL_Delay(100);
 			//UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
-		}
+			//UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
+		//}
 		break;
 
 	case RX_TIMEOUT:
@@ -526,7 +525,7 @@ static void PingPong_Process(void)  //funcion de tx del rak
 		/* CAMBIO AQUÍ: Si al Master le da un timeout esperando el ACK, significa que el paquete
 		 se perdió o el RX no escuchó. Reintentamos enviando un PING nuevo */
 		APP_LOG(TS_ON, VLEVEL_L,
-				"Master Alerta: Sin respuesta (Timeout). Reintentando PING...\n\r")
+				"Master Alerta: Sin respuesta (Timeout)\n\r\n\r")
 		;
 		//HAL_Delay(1000);
 		lora_busy = 0;

@@ -24,6 +24,8 @@
 #include "gpio.h"
 #include "driver_bmp280.h"
 #include "driver_bmp280_interface.h"
+#include "stm32_seq.h"
+#include "utilities_def.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
@@ -588,6 +590,8 @@ int main(void) {
 					alt_int, speed_scaled, imu.acc_x, imu.acc_y, imu.acc_z,
 					imu.gyr_x, imu.gyr_y, imu.gyr_z, temp_sht_bits, hum_bits,
 					press_bits);
+			char separador[100]= "------------------------------------------------------------------------\r\n";
+			UART_Print(separador);
 			char debug_msg[200] = "TLV [";
 			char hex_byte[5];
 			for (int i = 0; i < lora_tx_len; i++) {
@@ -596,18 +600,19 @@ int main(void) {
 				strcat(debug_msg, hex_byte);
 			}
 			char tail_buf[20];
-			snprintf(tail_buf, sizeof(tail_buf), "] %d bytes\r\n\r\n\r\n",
+			snprintf(tail_buf, sizeof(tail_buf), "] %d bytes\r\n",
 					lora_tx_len);
 			strcat(debug_msg, tail_buf);
 			UART_Print(debug_msg);
+			UART_Print(separador);
 
 			// 1. Verificamos si pasaron más de 2 segundos sin datos (Desconectado)
 			if (HAL_GetTick() - last_gps_time > 2000) {
 				snprintf(ascii_msg, sizeof(ascii_msg),
-						"\r\n[GPS] Tx desconectado\r\n"
+						"[GPS] Tx desconectado\r\n"
 								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
-								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n\r\n\r\n",
+								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n",
 						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
 						imu.temp_BMI270, temperature_sht21, hum,
 						temperature_bmp280, pressure);
@@ -615,10 +620,10 @@ int main(void) {
 			// 2. Verificamos si hay conexión y tenemos fix satelital
 			else if (gps_valid && fix_str[0] >= '1') {
 				snprintf(ascii_msg, sizeof(ascii_msg),
-						"\r\n[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
+						"[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
 								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
-								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n\r\n\r\n",
+								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n",
 						lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m,
 						s, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
 						imu.temp_BMI270, temperature_sht21, hum,
@@ -627,19 +632,20 @@ int main(void) {
 			// 3. Hay conexión pero aún no hay fix
 			else {
 				snprintf(ascii_msg, sizeof(ascii_msg),
-						"\r\n[GPS] Buscando satelites...\r\n"
+						"[GPS] Buscando satelites...\r\n"
 								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
-								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n\r\n\r\n",
+								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n",
 						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
 						imu.temp_BMI270, temperature_sht21, hum,
 						temperature_bmp280, pressure);
 			}
 			UART_Print(ascii_msg);
+			UART_Print(separador);
 			tlv_ready = 1;
-			MX_SubGHz_Phy_Process();
+			UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
 		}
-		//MX_SubGHz_Phy_Process();
+		MX_SubGHz_Phy_Process();
 	}
 
 	/* USER CODE END WHILE */
