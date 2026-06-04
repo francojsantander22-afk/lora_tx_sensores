@@ -40,8 +40,8 @@
 extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart1;
 /* Paquete TLV generado en main.c */
-extern uint8_t tlv_buf[];
-extern uint8_t tlv_len;
+extern uint8_t lora_tx_buffer[];
+extern uint8_t lora_tx_len;
 extern volatile uint8_t tlv_ready;
 extern volatile uint8_t rx_byte;
 /* USER CODE END EV */
@@ -500,12 +500,12 @@ static void PingPong_Process(void)  //funcion de tx del rak
 			sprintf((char*) BufferTx, "CONF:%lu:%lu:%lu:%lu", Conf_Frequency,
 					Conf_SF, Conf_Bandwidth, Conf_PayloadLen);
 			Radio.Send(BufferTx, strlen((const char*) BufferTx));
-		} else if (tlv_ready && tlv_len > 0) {
+		} else if (tlv_ready && lora_tx_len > 0) {
 			/* Paquete TLV de telemetría listo */
 			APP_LOG(TS_ON, VLEVEL_L, "TX: Enviando TLV (%d bytes)...\n\r",
-					tlv_len);
-			memcpy(BufferTx, tlv_buf, tlv_len);
-			Radio.Send(BufferTx, tlv_len);
+					lora_tx_len);
+			memcpy(BufferTx, lora_tx_buffer, lora_tx_len);
+			Radio.Send(BufferTx, lora_tx_len);
 			tlv_ready = 0; /* consumido */
 		} else {
 			/* Todavía no hay paquete nuevo — esperar y reintentar */

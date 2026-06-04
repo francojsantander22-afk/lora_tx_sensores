@@ -22,7 +22,8 @@
 #include "app_subghz_phy.h"
 #include "usart.h"
 #include "gpio.h"
-
+#include "driver_bmp280.h"
+#include "driver_bmp280_interface.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
@@ -47,7 +48,15 @@
 #define REG_ACC_RANGE       0x41
 #define REG_DATA_8          0x0C
 #define REG_TEMP_LSB        0x22
-
+//Direcciones SHT21
+#define SHT21_I2C_ADDR   (0x40 << 1) // Dirección I2C desplazada 1 bit
+#define CMD_MEASURE_T    0xF3        // Trigger T measurement (no hold master)
+#define CMD_MEASURE_RH   0xF5        // Trigger RH measurement (no hold master)
+//Dirección BMP280BMP280 (SDO GND)
+#define BMP280_ADDRESS_0 	0x76
+#define BMP280_REG_CTRL_MEAS 0xF4
+#define BMP280_REG_CONFIG    0xF5
+#define BMP280_REG_DATA      0xF7
 /* --- Tags del protocolo TLV --- */
 #define TLV_TAG_TIME        0x01
 #define TLV_TAG_GPS_COORD   0x02
@@ -69,10 +78,14 @@ typedef struct {
 
 /* --- Estructura de datos IMU --- */
 typedef struct {
-	int16_t acc_x, acc_y, acc_z;
-	int16_t gyr_x, gyr_y, gyr_z;
-	float temperature;
-} ImuData_t;
+	int16_t acc_x;
+	int16_t acc_y;
+	int16_t acc_z;
+	int16_t gyr_x;
+	int16_t gyr_y;
+	int16_t gyr_z;
+	float temp_BMI270;
+} BMI270_Data_t;
 
 /* USER CODE END PTD */
 
@@ -101,8 +114,8 @@ char line_buffer[100];
 uint8_t line_index = 0;
 
 /* --- Buffer TLV para transmisión LoRa --- */
-uint8_t tlv_buf[64];
-uint8_t tlv_len = 0;
+uint8_t lora_tx_buffer[128];
+uint8_t lora_tx_len = 0;
 
 /* USER CODE END PV */
 
@@ -120,32 +133,11 @@ void BMI270_ReadRegs(uint8_t reg, uint8_t *data, uint16_t len);
 HAL_StatusTypeDef BMI270_LoadConfigFile(void);
 float BMI270_ReadTemperature(void);
 
-/* TLV */
-static void tlv_reset(void);
-static uint8_t tlv_space_left(uint8_t needed);
-static void tlv_pack_time(uint8_t h, uint8_t m, uint8_t s);
-static void tlv_pack_coords(int32_t lat, int32_t lon);
-static void tlv_pack_int16(uint8_t tag, int16_t val);
-static void tlv_pack_vec3(uint8_t tag, int16_t x, int16_t y, int16_t z);
-
-/* GPS / NMEA */
-static uint8_t nmea_get_field(const char *nmea, uint8_t field_num, char *out,
-		uint8_t out_size);
-static int32_t nmea_coord_to_int32(const char *coord, char dir);
-static uint8_t gps_parse_gga(const char *nmea, GpsData_t *out);
-
-/* IMU */
-static void imu_read(ImuData_t *out);
-
-/* Telemetría */
-void telemetry_build_packet(const GpsData_t *gps, const ImuData_t *imu);
-void telemetry_debug_print(void);
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+bmp280_handle_t gs_handle;
 /* =========================================================
  *  UART
  * ========================================================= */
@@ -212,205 +204,154 @@ float BMI270_ReadTemperature(void) {
 	int16_t raw_temp = (int16_t) ((raw[1] << 8) | raw[0]);
 	return (raw_temp / 512.0f) + 23.0f;
 }
-
 /* =========================================================
- *  TLV – empaquetado con guard de overflow
+ *  STH21 – lectura temperatura + humedad
  * ========================================================= */
-void tlv_reset(void) {
-	tlv_len = 0;
-	memset(tlv_buf, 0, sizeof(tlv_buf));
-}
-
-uint8_t tlv_space_left(uint8_t needed) {
-	return (tlv_len + needed) <= (uint8_t) sizeof(tlv_buf);
-}
-
-void tlv_pack_time(uint8_t h, uint8_t m, uint8_t s) {
-	if (!tlv_space_left(5))
-		return;
-	tlv_buf[tlv_len++] = TLV_TAG_TIME;
-	tlv_buf[tlv_len++] = 3;
-	tlv_buf[tlv_len++] = h;
-	tlv_buf[tlv_len++] = m;
-	tlv_buf[tlv_len++] = s;
-}
-
-void tlv_pack_coords(int32_t lat, int32_t lon) {
-	if (!tlv_space_left(10))
-		return;
-	tlv_buf[tlv_len++] = TLV_TAG_GPS_COORD;
-	tlv_buf[tlv_len++] = 8;
-	tlv_buf[tlv_len++] = (lat >> 24) & 0xFF;
-	tlv_buf[tlv_len++] = (lat >> 16) & 0xFF;
-	tlv_buf[tlv_len++] = (lat >> 8) & 0xFF;
-	tlv_buf[tlv_len++] = lat & 0xFF;
-	tlv_buf[tlv_len++] = (lon >> 24) & 0xFF;
-	tlv_buf[tlv_len++] = (lon >> 16) & 0xFF;
-	tlv_buf[tlv_len++] = (lon >> 8) & 0xFF;
-	tlv_buf[tlv_len++] = lon & 0xFF;
-}
-
-void tlv_pack_int16(uint8_t tag, int16_t val) {
-	if (!tlv_space_left(4))
-		return;
-	tlv_buf[tlv_len++] = tag;
-	tlv_buf[tlv_len++] = 2;
-	tlv_buf[tlv_len++] = (val >> 8) & 0xFF;
-	tlv_buf[tlv_len++] = val & 0xFF;
-}
-
-void tlv_pack_vec3(uint8_t tag, int16_t x, int16_t y, int16_t z) {
-	if (!tlv_space_left(8))
-		return;
-	tlv_buf[tlv_len++] = tag;
-	tlv_buf[tlv_len++] = 6;
-	tlv_buf[tlv_len++] = (x >> 8) & 0xFF;
-	tlv_buf[tlv_len++] = x & 0xFF;
-	tlv_buf[tlv_len++] = (y >> 8) & 0xFF;
-	tlv_buf[tlv_len++] = y & 0xFF;
-	tlv_buf[tlv_len++] = (z >> 8) & 0xFF;
-	tlv_buf[tlv_len++] = z & 0xFF;
+void SHT21_Read(float *temperature, float *humidity) {
+	uint8_t cmd;
+	uint8_t data[3];
+	uint16_t raw_val;
+	// 1. Leer Temperatura
+	cmd = CMD_MEASURE_T;
+	HAL_I2C_Master_Transmit(&hi2c3, SHT21_I2C_ADDR, &cmd, 1, HAL_MAX_DELAY); // Enviamos el comando de medición de temperatura
+	HAL_Delay(85); // Esperamos el tiempo máximo de conversión para 14 bits (85 ms)
+	HAL_I2C_Master_Receive(&hi2c3, SHT21_I2C_ADDR, data, 3, HAL_MAX_DELAY); // Leemos 3 bytes: MSB, LSB y CRC
+	// Unimos los bytes y ponemos a '0' los últimos 2 bits de estado (0xFC = 11111100 en binario)
+	raw_val = (data[0] << 8) | (data[1] & 0xFC);
+	*temperature = -46.85 + 175.72 * ((float) raw_val / 65536.0); // Aplicamos la fórmula del datasheet
+	// 2. Leer Humedad Relativa
+	cmd = CMD_MEASURE_RH;
+	HAL_I2C_Master_Transmit(&hi2c3, SHT21_I2C_ADDR, &cmd, 1, HAL_MAX_DELAY); // Enviamos el comando de medición de humedad
+	HAL_Delay(29); // Esperamos el tiempo máximo de conversión para 12 bits (29 ms)
+	HAL_I2C_Master_Receive(&hi2c3, SHT21_I2C_ADDR, data, 3, HAL_MAX_DELAY); // Leemos 3 bytes: MSB, LSB y CRC
+	raw_val = (data[0] << 8) | (data[1] & 0xFC); // Unimos los bytes y ponemos a '0' los últimos 2 bits de estado
+	*humidity = -6.0 + 125.0 * ((float) raw_val / 65536.0);	// Aplicamos la fórmula del datasheet
 }
 
 /* =========================================================
  *  GPS – parseo NMEA robusto
  * ========================================================= */
-
-/*
- * Extrae el campo número field_num (base 0 = tipo sentencia) de una cadena NMEA.
- * Retorna 1 si el campo existe y no está vacío, 0 en caso contrario.
- */
-static uint8_t nmea_get_field(const char *nmea, uint8_t field_num, char *out,
-		uint8_t out_size) {
-	uint8_t commas = 0, j = 0;
-	for (uint8_t i = 0; nmea[i] != '\0' && nmea[i] != '*'; i++) {
+void get_nmea_field(const char *nmea, uint8_t field_num, char *result) {
+	uint8_t comma_count = 0;
+	uint8_t i = 0, j = 0;
+	while (nmea[i] != '\0' && nmea[i] != '*' && comma_count <= field_num) {
 		if (nmea[i] == ',') {
-			commas++;
-			continue;
+			comma_count++;
+		} else if (comma_count == field_num) {
+			result[j++] = nmea[i];
 		}
-		if (commas == field_num) {
-			if (j < out_size - 1)
-				out[j++] = nmea[i];
-		}
-		if (commas > field_num)
-			break;
+		i++;
 	}
-	out[j] = '\0';
-	return (j > 0) ? 1 : 0;
+	result[j] = '\0';
 }
 
-/*
- * Convierte un campo de coordenada NMEA (DDDMM.MMMMM) a grados decimales × 100000.
- * dir: 'N','S','E','W'
- */
-static int32_t nmea_coord_to_int32(const char *coord, char dir) {
-	if (coord[0] == '\0')
+// Empaquetar 2 Bytes
+void tlv_pack_16(uint8_t type, uint16_t val) {
+	lora_tx_buffer[lora_tx_len++] = type;
+	lora_tx_buffer[lora_tx_len++] = 2; // Longitud: 2 bytes
+	lora_tx_buffer[lora_tx_len++] = (val >> 8) & 0xFF; // MSB
+	lora_tx_buffer[lora_tx_len++] = val & 0xFF;        // LSB
+}
+
+// Empaquetar 4 Bytes
+void tlv_pack_32(uint8_t type, uint32_t val) {
+	lora_tx_buffer[lora_tx_len++] = type;
+	lora_tx_buffer[lora_tx_len++] = 4; // Longitud: 4 bytes
+	lora_tx_buffer[lora_tx_len++] = (val >> 24) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = (val >> 16) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = (val >> 8) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = val & 0xFF;
+}
+
+void tlv_pack_time(uint8_t type, uint8_t h, uint8_t m, uint8_t s) {
+	lora_tx_buffer[lora_tx_len++] = type;
+	lora_tx_buffer[lora_tx_len++] = 3; // Longitud: 3 bytes
+	lora_tx_buffer[lora_tx_len++] = h;
+	lora_tx_buffer[lora_tx_len++] = m;
+	lora_tx_buffer[lora_tx_len++] = s;
+}
+
+void tlv_pack_xyz(uint8_t type, int16_t x, int16_t y, int16_t z) {
+	lora_tx_buffer[lora_tx_len++] = type;
+	lora_tx_buffer[lora_tx_len++] = 6;
+	lora_tx_buffer[lora_tx_len++] = (x >> 8) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = x & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = (y >> 8) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = y & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = (z >> 8) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = z & 0xFF;
+}
+
+void tlv_pack_gps_coords(uint8_t type, int32_t lat, int32_t lon) {
+	lora_tx_buffer[lora_tx_len++] = type;
+	lora_tx_buffer[lora_tx_len++] = 8;
+	lora_tx_buffer[lora_tx_len++] = (lat >> 24) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = (lat >> 16) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = (lat >> 8) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = lat & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = (lon >> 24) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = (lon >> 16) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = (lon >> 8) & 0xFF;
+	lora_tx_buffer[lora_tx_len++] = lon & 0xFF;
+}
+
+int32_t nmea_to_int32(char *coord_str, char dir) {
+	if (strlen(coord_str) == 0)
 		return 0;
-	float raw = atof(coord);
-	int deg = (int) (raw / 100.0f);
-	float dec_deg = deg + (raw - (float) (deg * 100)) / 60.0f;
+	float raw = atof(coord_str);
+	int degrees = (int) (raw / 100.0f);
+	float minutes = raw - (degrees * 100.0f);
+	float decimal_deg = degrees + (minutes / 60.0f);
 	if (dir == 'S' || dir == 'W')
-		dec_deg = -dec_deg;
-	return (int32_t) (dec_deg * 100000.0f);
-}
-
-/*
- * Parsea una sentencia GGA y llena gps_out.
- * Retorna 1 si hay fix válido, 0 si no.
- */
-static uint8_t gps_parse_gga(const char *nmea, GpsData_t *gps_out) {
-	memset(gps_out, 0, sizeof(GpsData_t));
-
-	char fix[2] = { 0 };
-	if (!nmea_get_field(nmea, 6, fix, sizeof(fix)))
-		return 0;
-	if (fix[0] < '1')
-		return 0; /* 0 = sin fix */
-
-	char time_s[12] = { 0 };
-	char lat_s[14] = { 0 }, ns[2] = { 0 };
-	char lon_s[14] = { 0 }, ew[2] = { 0 };
-	char alt_s[10] = { 0 };
-
-	nmea_get_field(nmea, 1, time_s, sizeof(time_s));
-	nmea_get_field(nmea, 2, lat_s, sizeof(lat_s));
-	nmea_get_field(nmea, 3, ns, sizeof(ns));
-	nmea_get_field(nmea, 4, lon_s, sizeof(lon_s));
-	nmea_get_field(nmea, 5, ew, sizeof(ew));
-	nmea_get_field(nmea, 9, alt_s, sizeof(alt_s));
-
-	/* Hora UTC → ARG (UTC-3), con wrap en medianoche */
-	int utc_h = (time_s[0] - '0') * 10 + (time_s[1] - '0');
-	gps_out->hour = (uint8_t) ((utc_h - 3 + 24) % 24);
-	gps_out->minute = (uint8_t) ((time_s[2] - '0') * 10 + (time_s[3] - '0'));
-	gps_out->second = (uint8_t) ((time_s[4] - '0') * 10 + (time_s[5] - '0'));
-
-	gps_out->lat = nmea_coord_to_int32(lat_s, ns[0]);
-	gps_out->lon = nmea_coord_to_int32(lon_s, ew[0]);
-	gps_out->altitude = (int16_t) atof(alt_s);
-	gps_out->valid = 1;
-	return 1;
+		decimal_deg *= -1.0f;
+	return (int32_t) (decimal_deg * 100000.0f);
 }
 
 /* =========================================================
  *  IMU – lectura BMI270 (accel + gyro + temp)
  * ========================================================= */
-static void imu_read(ImuData_t *imu_out) {
+void BMI270_Get_Data(BMI270_Data_t *imu_data) {
 	uint8_t raw[14];
 	BMI270_ReadRegs(REG_DATA_8, raw, 14);
+	// Guardamos los datos dentro de la estructura usando la flecha (->)
+	imu_data->acc_x = (int16_t) ((raw[1] << 8) | raw[0]);
+	imu_data->acc_y = (int16_t) ((raw[3] << 8) | raw[2]);
+	imu_data->acc_z = (int16_t) ((raw[5] << 8) | raw[4]);
 
-	imu_out->acc_x = (int16_t) ((raw[1] << 8) | raw[0]);
-	imu_out->acc_y = (int16_t) ((raw[3] << 8) | raw[2]);
-	imu_out->acc_z = (int16_t) ((raw[5] << 8) | raw[4]);
-	imu_out->gyr_x = (int16_t) ((raw[7] << 8) | raw[6]);
-	imu_out->gyr_y = (int16_t) ((raw[9] << 8) | raw[8]);
-	imu_out->gyr_z = (int16_t) ((raw[11] << 8) | raw[10]);
-	imu_out->temperature = BMI270_ReadTemperature();
+	imu_data->gyr_x = (int16_t) ((raw[7] << 8) | raw[6]);
+	imu_data->gyr_y = (int16_t) ((raw[9] << 8) | raw[8]);
+	imu_data->gyr_z = (int16_t) ((raw[11] << 8) | raw[10]);
+
+	imu_data->temp_BMI270 = BMI270_ReadTemperature();
 }
+// Función maestra para armar el paquete LoRa
+uint8_t build_telemetry_payload(uint8_t gps_has_fix, uint8_t h, uint8_t m,
+		uint8_t s, int32_t lat, int32_t lon, int16_t alt, uint16_t speed,
+		int16_t acc_x, int16_t acc_y, int16_t acc_z, int16_t gyr_x,
+		int16_t gyr_y, int16_t gyr_z, int16_t temp_sht, uint16_t hum_sht,
+		uint32_t pressure) {
+	lora_tx_len = 0; // Reiniciar el puntero del búfer global
 
-/* =========================================================
- *  TELEMETRÍA – ensamblar paquete TLV completo
- * ========================================================= */
-
-/*
- * Arma el paquete TLV en tlv_buf[]/tlv_len.
- * Tamaño máximo esperado:
- *   GPS: TIME(5) + COORD(10) + ALT(4)  = 19 bytes
- *   IMU: ACCEL(8) + GYRO(8) + TEMP(4)  = 20 bytes
- *   TOTAL máximo: 39 bytes  < 64 bytes del buffer
- */
-void telemetry_build_packet(const GpsData_t *gps, const ImuData_t *imu) {
-	tlv_reset();
-
-	/* Bloque GPS – solo si hay fix válido */
-	if (gps->valid) {
-		tlv_pack_time(gps->hour, gps->minute, gps->second);
-		tlv_pack_coords(gps->lat, gps->lon);
-		tlv_pack_int16(TLV_TAG_ALTITUDE, gps->altitude);
+	// 1. Datos GPS (Solo se agregan si hay satélites válidos)
+	if (gps_has_fix) {
+		tlv_pack_time(0x01, h, m, s);
+		tlv_pack_gps_coords(0x02, lat, lon);
+		tlv_pack_16(0x03, alt);
+		tlv_pack_16(0x04, speed);
 	}
 
-	/* Bloque IMU – siempre presente */
-	tlv_pack_vec3(TLV_TAG_ACCEL, imu->acc_x, imu->acc_y, imu->acc_z);
-	tlv_pack_vec3(TLV_TAG_GYRO, imu->gyr_x, imu->gyr_y, imu->gyr_z);
-	tlv_pack_int16(TLV_TAG_TEMP, (int16_t) (imu->temperature * 100.0f));
+	// 2. Datos IMU (Siempre se empaquetan)
+	tlv_pack_xyz(0x05, acc_x, acc_y, acc_z);
+	tlv_pack_xyz(0x06, gyr_x, gyr_y, gyr_z);
+	//tlv_pack_16(0x0A, temp_imu); // Type 0x0A para Temperatura IMU
+
+	// 3. Datos Atmosféricos (Siempre se empaquetan)
+	tlv_pack_16(0x07, temp_sht);
+	tlv_pack_16(0x08, hum_sht);
+	tlv_pack_32(0x09, pressure);
+
+	return lora_tx_len; // Devuelve el tamaño final del paquete
 }
-
-/*
- * Imprime por UART el contenido del último paquete TLV ensamblado.
- * Buffer estático calculado: "TLV [" + 64×"XX " + "] 64 bytes\r\n" < 300 chars.
- */
-void telemetry_debug_print(void) {
-	char buf[300];
-	int pos = 0;
-
-	pos += snprintf(buf + pos, sizeof(buf) - pos, "TLV [");
-	for (uint8_t i = 0; i < tlv_len && pos < (int) (sizeof(buf) - 20); i++) {
-		pos += snprintf(buf + pos, sizeof(buf) - pos, "%02X ", tlv_buf[i]);
-	}
-	snprintf(buf + pos, sizeof(buf) - pos, "] %d bytes\r\n", tlv_len);
-	UART_Print(buf);
-}
-
 /* USER CODE END 0 */
 
 /**
@@ -441,11 +382,47 @@ int main(void) {
 	MX_USART1_UART_Init();
 	MX_USART2_UART_Init();
 
-	HAL_Delay(1000);
+	HAL_Delay(3000);
 	UART_Print("Inicializando sistema...\r\n");
+	//BMP280
+	// 1. Enlazar las funciones de la interfaz
+	DRIVER_BMP280_LINK_INIT(&gs_handle, bmp280_handle_t);
 
+	// Enlaces I2C (Los que ya arreglamos)
+	DRIVER_BMP280_LINK_IIC_INIT(&gs_handle, bmp280_interface_iic_init);
+	DRIVER_BMP280_LINK_IIC_DEINIT(&gs_handle, bmp280_interface_iic_deinit);
+	DRIVER_BMP280_LINK_IIC_READ(&gs_handle, bmp280_interface_iic_read);
+	DRIVER_BMP280_LINK_IIC_WRITE(&gs_handle, bmp280_interface_iic_write);
+
+	// NUEVOS: Enlaces SPI (Ficticios para pasar el control de seguridad)
+	DRIVER_BMP280_LINK_SPI_INIT(&gs_handle, bmp280_interface_spi_init);
+	DRIVER_BMP280_LINK_SPI_DEINIT(&gs_handle, bmp280_interface_spi_deinit);
+	DRIVER_BMP280_LINK_SPI_READ(&gs_handle, bmp280_interface_spi_read);
+	DRIVER_BMP280_LINK_SPI_WRITE(&gs_handle, bmp280_interface_spi_write);
+
+	// Enlaces misceláneos
+	DRIVER_BMP280_LINK_DELAY_MS(&gs_handle, bmp280_interface_delay_ms);
+	DRIVER_BMP280_LINK_DEBUG_PRINT(&gs_handle, bmp280_interface_debug_print);
+
+	// 2. Configurar el protocolo e inicializar
+	bmp280_set_interface(&gs_handle, BMP280_INTERFACE_IIC);
+	bmp280_set_addr_pin(&gs_handle, BMP280_ADDRESS_0); // O BMP280_ADDR_GND dependiendo de tu pin SDO
+
+	if (bmp280_init(&gs_handle) != 0) {
+		UART_Print("Error al inicializar sensor BMP280\r\n");
+	}
+
+	// 3. Configuraciones básicas (recomendadas para clima/estándar)
+	bmp280_set_temperature_oversampling(&gs_handle, BMP280_OVERSAMPLING_x1);
+	bmp280_set_pressure_oversampling(&gs_handle, BMP280_OVERSAMPLING_x4);
+	bmp280_set_standby_time(&gs_handle, BMP280_STANDBY_TIME_500_MS);
+	bmp280_set_mode(&gs_handle, BMP280_MODE_NORMAL); // Arrancar mediciones continuas
 	/* USER CODE BEGIN 2 */
-
+	uint32_t raw_temperature_bmp;
+	uint32_t raw_pressure;
+	float temperature_bmp280, pressure;
+	float temperature_sht21, hum;
+	float gps_speed_kmh = 0.0f;
 	/* --- Inicialización BMI270 --- */
 	uint8_t chip_id = BMI270_ReadReg(REG_CHIP_ID);
 	;
@@ -483,15 +460,15 @@ int main(void) {
 		UART_Print("BMI270 OK.\r\n");
 	}
 
-	uint32_t last_gps_tick = HAL_GetTick();
-	uint32_t last_imu_tick = HAL_GetTick();
-	static GpsData_t last_valid_gps = { 0 };
+	uint32_t last_gps_time = HAL_GetTick();
+	uint32_t last_imu_time = HAL_GetTick();
+	BMI270_Data_t imu;
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
-		uint8_t trigger = 0;
+		uint8_t trigger_telemetry = 0;
 		uint8_t gps_valid = 0;
 		/* Watchdog ISR */
 		if (huart1.RxState == HAL_UART_STATE_READY) {
@@ -499,59 +476,167 @@ int main(void) {
 			HAL_UART_Receive_IT(&huart1, (uint8_t*) &rx_byte, 1);
 		}
 		/* TAREA 1: GPS — solo si no hay paquete pendiente */
-		while (rx_head != rx_tail) {
+		if (rx_head != rx_tail) {
 			char c = (char) rx_buffer[rx_tail];
 			rx_tail = (rx_tail + 1) % RX_BUF_SIZE;
 
 			if (c == '\n' || line_index >= sizeof(line_buffer) - 1) {
 				line_buffer[line_index] = '\0';
-				line_index = 0;
 
-				if (strstr(line_buffer, "GGA") != NULL) {
-					last_gps_tick = HAL_GetTick();
-					GpsData_t gps_temp = { 0 };
-					// DEBUG 1: ver quÃ© sentencia llega y quÃ© parsea
-					char dbg[130];
-					snprintf(dbg, sizeof(dbg), "[GGA] raw='%s'\r\n",
-							line_buffer);
-					UART_Print(dbg);
-					if (gps_parse_gga(line_buffer, &gps_temp)) {
-						last_valid_gps = gps_temp; /* guardar fix vÃ¡lido */
-						gps_valid = 1;
+				if (strstr(line_buffer, "VTG") != NULL) {
+					char speed_str[10] = { 0 }; //campo 7 contiene velocidad en km
+					get_nmea_field(line_buffer, 7, speed_str);
+					if (strlen(speed_str) > 0) {
+						gps_speed_kmh = atof(speed_str);
 					}
-					trigger = 1;
-					break;
+				} else if (strstr(line_buffer, "GGA") != NULL) {
+					last_gps_time = HAL_GetTick();
+					trigger_telemetry = 1;
+					gps_valid = 1;
 				}
+				line_index = 0;
 			} else if (c != '\r') {
 				line_buffer[line_index++] = c;
 			}
 		}
 
 		/* TAREA 2: Watchdog */
-		if (!trigger) {
-			uint32_t now = HAL_GetTick();
-			if ((now - last_gps_tick > 2000) && (now - last_imu_tick > 1000)) {
-				last_imu_tick = now;
-				trigger = 1;
+		if (HAL_GetTick() - last_gps_time > 2000) {
+			if (HAL_GetTick() - last_imu_time > 1000) {
+				last_imu_time = HAL_GetTick();
+				trigger_telemetry = 1;
+				gps_valid = 0;
 			}
 		} else {
-			last_imu_tick = HAL_GetTick();
+			last_imu_time = HAL_GetTick();
 		}
 
-		/* TAREA 3: Empaquetar */
-		if (trigger) {
-			ImuData_t imu = { 0 };
-			imu_read(&imu);
-			telemetry_build_packet(&last_valid_gps, &imu);
-			telemetry_debug_print();
+		//GPS//
+		if (trigger_telemetry == 1) {
+			lora_tx_len = 0;
+
+			// Variables NMEA subidas de scope para usarlas en el ASCII print
+			char time_str[15] = { 0 }, lat_str[15] = { 0 }, ns[2] = { 0 };
+			char lon_str[15] = { 0 }, ew[2] = { 0 }, alt_str[10] = { 0 },
+					fix_str[2] = { 0 };
+			uint8_t gps_has_fix = 0; // Nuestra bandera lógica
+			uint8_t h = 0, m = 0, s = 0;
+			uint16_t speed_scaled = 0;
+			int32_t lat_int = 0, lon_int = 0;
+			int16_t alt_int = 0;
+
+			// 1. GPS (si tiene fix)
+			if (gps_valid) {
+				get_nmea_field(line_buffer, 1, time_str);
+				get_nmea_field(line_buffer, 2, lat_str);
+				get_nmea_field(line_buffer, 3, ns);
+				get_nmea_field(line_buffer, 4, lon_str);
+				get_nmea_field(line_buffer, 5, ew);
+				get_nmea_field(line_buffer, 6, fix_str);
+				get_nmea_field(line_buffer, 9, alt_str);
+
+				if (fix_str[0] >= '1') {
+					gps_has_fix = 1;
+
+					int utc_h = (time_str[0] - '0') * 10 + (time_str[1] - '0');
+					h = (utc_h - 3 < 0) ? utc_h - 3 + 24 : utc_h - 3;
+					m = (time_str[2] - '0') * 10 + (time_str[3] - '0');
+					s = (time_str[4] - '0') * 10 + (time_str[5] - '0');
+
+					lat_int = nmea_to_int32(lat_str, ns[0]);
+					lon_int = nmea_to_int32(lon_str, ew[0]);
+
+					alt_int = (int16_t) atof(alt_str);
+				}
+			}
+
+			//BMI270//
+			BMI270_Get_Data(&imu);
+
+			float ax_g = imu.acc_x / 4096.0f;
+			float ay_g = imu.acc_y / 4096.0f;
+			float az_g = imu.acc_z / 4096.0f;
+
+			float gx_dps = imu.gyr_x / 16.4f;
+			float gy_dps = imu.gyr_y / 16.4f;
+			float gz_dps = imu.gyr_z / 16.4f;
+			//SHT21//
+			SHT21_Read(&temperature_sht21, &hum);
+
+			int16_t temp_sht_bits = (int16_t) (temperature_sht21 * 100.0f);
+			uint16_t hum_bits = (uint16_t) (hum * 100.0f);
+
+			//BMP280//
+			uint32_t press_bits = 0;
+			if (bmp280_read_temperature_pressure(&gs_handle,
+					&raw_temperature_bmp, &temperature_bmp280, &raw_pressure,
+					&pressure) == 0) {
+				press_bits = (uint32_t) pressure;
+			} else {
+				UART_Print("Error al leer datos BMP280\r\n");
+			}
+			HAL_Delay(100);
+			char ascii_msg[300];
+
+			speed_scaled = (uint16_t)(gps_speed_kmh * 100.0f);
+			build_telemetry_payload(gps_has_fix, h, m, s, lat_int, lon_int,
+					alt_int, speed_scaled, imu.acc_x, imu.acc_y, imu.acc_z,
+					imu.gyr_x, imu.gyr_y, imu.gyr_z, temp_sht_bits, hum_bits,
+					press_bits);
+			char debug_msg[200] = "TLV [";
+			char hex_byte[5];
+			for (int i = 0; i < lora_tx_len; i++) {
+				snprintf(hex_byte, sizeof(hex_byte), "%02X ",
+						lora_tx_buffer[i]);
+				strcat(debug_msg, hex_byte);
+			}
+			char tail_buf[20];
+			snprintf(tail_buf, sizeof(tail_buf), "] %d bytes\r\n\r\n\r\n", lora_tx_len);
+			strcat(debug_msg, tail_buf);
+			UART_Print(debug_msg);
+
+			// 1. Verificamos si pasaron más de 2 segundos sin datos (Desconectado)
+			if (HAL_GetTick() - last_gps_time > 2000) {
+				snprintf(ascii_msg, sizeof(ascii_msg),
+						"\r\n[GPS] Tx desconectado\r\n"
+								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
+								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
+								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n\r\n\r\n",
+						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
+						imu.temp_BMI270, temperature_sht21, hum,
+						temperature_bmp280, pressure);
+			}
+			// 2. Verificamos si hay conexión y tenemos fix satelital
+			else if (gps_valid && fix_str[0] >= '1') {
+				snprintf(ascii_msg, sizeof(ascii_msg),
+						"\r\n[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
+								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
+								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
+								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n\r\n\r\n",
+						lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m,
+						s, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
+						imu.temp_BMI270, temperature_sht21, hum,
+						temperature_bmp280, pressure);
+			}
+			// 3. Hay conexión pero aún no hay fix
+			else {
+				snprintf(ascii_msg, sizeof(ascii_msg),
+						"\r\n[GPS] Buscando satelites...\r\n"
+								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
+								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
+								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n\r\n\r\n",
+						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
+						imu.temp_BMI270, temperature_sht21, hum,
+						temperature_bmp280, pressure);
+			}
+			UART_Print(ascii_msg);
 			tlv_ready = 1;
 		}
-		MX_SubGHz_Phy_Process();
+		//MX_SubGHz_Phy_Process();
 	}
 
-
-/* USER CODE END WHILE */
-/* USER CODE BEGIN 3 */
+	/* USER CODE END WHILE */
+	/* USER CODE BEGIN 3 */
 }
 /* USER CODE END 3 */
 
@@ -560,35 +645,35 @@ int main(void) {
  * @retval None
  */
 void SystemClock_Config(void) {
-RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
-RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
+	RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
+	RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
 
-HAL_PWR_EnableBkUpAccess();
-__HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
-__HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+	HAL_PWR_EnableBkUpAccess();
+	__HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+	__HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE
-		| RCC_OSCILLATORTYPE_MSI;
-RCC_OscInitStruct.LSEState = RCC_LSE_ON;
-RCC_OscInitStruct.MSIState = RCC_MSI_ON;
-RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
-RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_11;
-RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
-	Error_Handler();
-}
+	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE
+			| RCC_OSCILLATORTYPE_MSI;
+	RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+	RCC_OscInitStruct.MSIState = RCC_MSI_ON;
+	RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
+	RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_11;
+	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+		Error_Handler();
+	}
 
-RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK3 | RCC_CLOCKTYPE_HCLK
-		| RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
-RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
-RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
-RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-RCC_ClkInitStruct.AHBCLK3Divider = RCC_SYSCLK_DIV1;
+	RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK3 | RCC_CLOCKTYPE_HCLK
+			| RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+	RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+	RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+	RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+	RCC_ClkInitStruct.AHBCLK3Divider = RCC_SYSCLK_DIV1;
 
-if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
-	Error_Handler();
-}
+	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
+		Error_Handler();
+	}
 }
 
 /* USER CODE BEGIN 4 */
@@ -599,11 +684,11 @@ if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
  * @retval None
  */
 void Error_Handler(void) {
-/* USER CODE BEGIN Error_Handler_Debug */
-__disable_irq();
-while (1) {
-}
-/* USER CODE END Error_Handler_Debug */
+	/* USER CODE BEGIN Error_Handler_Debug */
+	__disable_irq();
+	while (1) {
+	}
+	/* USER CODE END Error_Handler_Debug */
 }
 
 #ifdef USE_FULL_ASSERT
