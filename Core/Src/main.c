@@ -22,8 +22,6 @@
 #include "app_subghz_phy.h"
 #include "usart.h"
 #include "gpio.h"
-#include "driver_bmp280.h"
-#include "driver_bmp280_interface.h"
 #include "stm32_seq.h"
 #include "utilities_def.h"
 /* Private includes ----------------------------------------------------------*/
@@ -130,7 +128,6 @@ float BMI270_ReadTemperature(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-bmp280_handle_t gs_handle;
 /* =========================================================
  *  UART
  * ========================================================= */
