@@ -385,14 +385,6 @@ int main(void) {
 		}
 	}
 
-<<<<<<< HEAD
-	// 3. Configuraciones básicas (recomendadas para clima/estándar)
-	bmp280_set_temperature_oversampling(&gs_handle, BMP280_OVERSAMPLING_x1);
-	bmp280_set_pressure_oversampling(&gs_handle, BMP280_OVERSAMPLING_x4);
-	bmp280_set_standby_time(&gs_handle, BMP280_STANDBY_TIME_500_MS);
-	bmp280_set_mode(&gs_handle, BMP280_MODE_NORMAL); // Arrancar mediciones continuas
-	/* USER CODE BEGIN 2 */
-
 	// 1. Habilitar el reloj del puerto correspondiente
 	__HAL_RCC_GPIOB_CLK_ENABLE();// Ojo: Cambiar si usas GPIOA, GPIOC, etc.
 
@@ -409,30 +401,10 @@ int main(void) {
 	// 4. Iniciar con el LED apagado
 	HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_RESET);
 
-	uint32_t raw_temperature_bmp;
-	uint32_t raw_pressure;
-	float temperature_bmp280, pressure;
-=======
 	CMPS2_Init(&hi2c3);
 	MS5611_Init(&hi2c3, 0);
 	UART_Print("Scan completo.\r\n");
-	// 1. Habilitar el reloj del puerto correspondiente
-	__HAL_RCC_GPIOB_CLK_ENABLE();// Ojo: Cambiar si usas GPIOA, GPIOC, etc.
 
-	// 2. Configurar el pin
-	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
-	GPIO_InitStruct.Pin = LED_BLUE_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-
-	// 3. Aplicar configuración
-	HAL_GPIO_Init(LED_BLUE_GPIO_Port, &GPIO_InitStruct);
-
-	// 4. Iniciar con el LED apagado
-	HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_RESET);
-
->>>>>>> refs/heads/arreglos
 	float temperature_sht21, hum;
 	float gps_speed_kmh = 0.0f;
 	/* --- Inicialización BMI270 --- */
@@ -599,11 +571,7 @@ int main(void) {
 			build_telemetry_payload(gps_has_fix, h, m, s, lat_int, lon_int,
 					alt_int, speed_scaled, imu.acc_x, imu.acc_y, imu.acc_z,
 					imu.gyr_x, imu.gyr_y, imu.gyr_z, temp_sht_bits, hum_bits,
-<<<<<<< HEAD
-					press_bits);
-=======
 					press_bits, mag_angle_scaled);
->>>>>>> refs/heads/arreglos
 			char separador[100] =
 					"------------------------------------------------------------------------\r\n";
 			UART_Print(separador);
