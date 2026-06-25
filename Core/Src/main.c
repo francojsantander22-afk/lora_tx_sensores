@@ -22,8 +22,6 @@
 #include "app_subghz_phy.h"
 #include "usart.h"
 #include "gpio.h"
-#include "driver_bmp280.h"
-#include "driver_bmp280_interface.h"
 #include "stm32_seq.h"
 #include "utilities_def.h"
 /* Private includes ----------------------------------------------------------*/
@@ -33,6 +31,8 @@
 #include <stdlib.h>
 #include <bmi270_config.h>
 #include <stdbool.h>
+#include "cmps2.h"
+#include "ms5611.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,18 +54,6 @@
 #define SHT21_I2C_ADDR   (0x40 << 1) // Dirección I2C desplazada 1 bit
 #define CMD_MEASURE_T    0xF3        // Trigger T measurement (no hold master)
 #define CMD_MEASURE_RH   0xF5        // Trigger RH measurement (no hold master)
-//Dirección BMP280BMP280 (SDO GND)
-#define BMP280_ADDRESS_0 	0x76
-#define BMP280_REG_CTRL_MEAS 0xF4
-#define BMP280_REG_CONFIG    0xF5
-#define BMP280_REG_DATA      0xF7
-/* --- Tags del protocolo TLV --- */
-#define TLV_TAG_TIME        0x01
-#define TLV_TAG_GPS_COORD   0x02
-#define TLV_TAG_ALTITUDE    0x03
-#define TLV_TAG_ACCEL       0x04
-#define TLV_TAG_TEMP        0x05
-#define TLV_TAG_GYRO        0x06   /* Giroscopio: nuevo tag */
 
 /* --- Estructura de datos GPS parseados --- */
 typedef struct {
@@ -140,7 +128,6 @@ float BMI270_ReadTemperature(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-bmp280_handle_t gs_handle;
 /* =========================================================
  *  UART
  * ========================================================= */
@@ -332,7 +319,7 @@ uint8_t build_telemetry_payload(uint8_t gps_has_fix, uint8_t h, uint8_t m,
 		uint8_t s, int32_t lat, int32_t lon, int16_t alt, uint16_t speed,
 		int16_t acc_x, int16_t acc_y, int16_t acc_z, int16_t gyr_x,
 		int16_t gyr_y, int16_t gyr_z, int16_t temp_sht, uint16_t hum_sht,
-		uint32_t pressure) {
+		uint32_t pressure, uint16_t mag_angle) {
 	lora_tx_len = 0; // Reiniciar el puntero del búfer global
 
 	// 1. Datos GPS (Solo se agregan si hay satélites válidos)
@@ -352,6 +339,7 @@ uint8_t build_telemetry_payload(uint8_t gps_has_fix, uint8_t h, uint8_t m,
 	tlv_pack_16(0x07, temp_sht);
 	tlv_pack_16(0x08, hum_sht);
 	tlv_pack_32(0x09, pressure);
+	tlv_pack_16(0x0D, mag_angle);
 
 	return lora_tx_len; // Devuelve el tamaño final del paquete
 }
@@ -384,37 +372,20 @@ int main(void) {
 	MX_I2C3_Init();
 	MX_USART1_UART_Init();
 	MX_USART2_UART_Init();
-
+	/* USER CODE BEGIN 2 */
 	HAL_Delay(3000);
 	UART_Print("Inicializando sistema...\r\n");
-	//BMP280
-	// 1. Enlazar las funciones de la interfaz
-	DRIVER_BMP280_LINK_INIT(&gs_handle, bmp280_handle_t);
 
-	// Enlaces I2C (Los que ya arreglamos)
-	DRIVER_BMP280_LINK_IIC_INIT(&gs_handle, bmp280_interface_iic_init);
-	DRIVER_BMP280_LINK_IIC_DEINIT(&gs_handle, bmp280_interface_iic_deinit);
-	DRIVER_BMP280_LINK_IIC_READ(&gs_handle, bmp280_interface_iic_read);
-	DRIVER_BMP280_LINK_IIC_WRITE(&gs_handle, bmp280_interface_iic_write);
-
-	// NUEVOS: Enlaces SPI (Ficticios para pasar el control de seguridad)
-	DRIVER_BMP280_LINK_SPI_INIT(&gs_handle, bmp280_interface_spi_init);
-	DRIVER_BMP280_LINK_SPI_DEINIT(&gs_handle, bmp280_interface_spi_deinit);
-	DRIVER_BMP280_LINK_SPI_READ(&gs_handle, bmp280_interface_spi_read);
-	DRIVER_BMP280_LINK_SPI_WRITE(&gs_handle, bmp280_interface_spi_write);
-
-	// Enlaces misceláneos
-	DRIVER_BMP280_LINK_DELAY_MS(&gs_handle, bmp280_interface_delay_ms);
-	DRIVER_BMP280_LINK_DEBUG_PRINT(&gs_handle, bmp280_interface_debug_print);
-
-	// 2. Configurar el protocolo e inicializar
-	bmp280_set_interface(&gs_handle, BMP280_INTERFACE_IIC);
-	bmp280_set_addr_pin(&gs_handle, BMP280_ADDRESS_0); // O BMP280_ADDR_GND dependiendo de tu pin SDO
-
-	if (bmp280_init(&gs_handle) != 0) {
-		UART_Print("Error al inicializar sensor BMP280\r\n");
+	UART_Print("Escaneando I2C3...\r\n");
+	for (uint8_t addr = 1; addr < 128; addr++) {
+		if (HAL_I2C_IsDeviceReady(&hi2c3, addr << 1, 1, 10) == HAL_OK) {
+			char found[30];
+			snprintf(found, sizeof(found), "  Dispositivo en 0x%02X\r\n", addr);
+			UART_Print(found);
+		}
 	}
 
+<<<<<<< HEAD
 	// 3. Configuraciones básicas (recomendadas para clima/estándar)
 	bmp280_set_temperature_oversampling(&gs_handle, BMP280_OVERSAMPLING_x1);
 	bmp280_set_pressure_oversampling(&gs_handle, BMP280_OVERSAMPLING_x4);
@@ -441,6 +412,27 @@ int main(void) {
 	uint32_t raw_temperature_bmp;
 	uint32_t raw_pressure;
 	float temperature_bmp280, pressure;
+=======
+	CMPS2_Init(&hi2c3);
+	MS5611_Init(&hi2c3, 0);
+	UART_Print("Scan completo.\r\n");
+	// 1. Habilitar el reloj del puerto correspondiente
+	__HAL_RCC_GPIOB_CLK_ENABLE();// Ojo: Cambiar si usas GPIOA, GPIOC, etc.
+
+	// 2. Configurar el pin
+	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+	GPIO_InitStruct.Pin = LED_BLUE_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+
+	// 3. Aplicar configuración
+	HAL_GPIO_Init(LED_BLUE_GPIO_Port, &GPIO_InitStruct);
+
+	// 4. Iniciar con el LED apagado
+	HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_RESET);
+
+>>>>>>> refs/heads/arreglos
 	float temperature_sht21, hum;
 	float gps_speed_kmh = 0.0f;
 	/* --- Inicialización BMI270 --- */
@@ -586,27 +578,32 @@ int main(void) {
 			float gz_dps = imu.gyr_z / 16.4f;
 			//SHT21//
 			SHT21_Read(&temperature_sht21, &hum);
-
 			int16_t temp_sht_bits = (int16_t) (temperature_sht21 * 100.0f);
 			uint16_t hum_bits = (uint16_t) (hum * 100.0f);
 
-			//BMP280//
-			uint32_t press_bits = 0;
-			if (bmp280_read_temperature_pressure(&gs_handle,
-					&raw_temperature_bmp, &temperature_bmp280, &raw_pressure,
-					&pressure) == 0) {
-				press_bits = (uint32_t) pressure;
-			} else {
-				UART_Print("Error al leer datos BMP280\r\n");
-			}
-			HAL_Delay(100);
-			char ascii_msg[300];
+			//MS5611
+			float temperature_ms5611 = 0.0f;
+			float pressure_pa = 0.0f;
+			float pressure_ms5611;
+			uint32_t press_bits;
+
+			MS5611_Measure(&hi2c3, &temperature_ms5611, &pressure_pa);
+			pressure_ms5611 = pressure_pa / 100.0f;  // convertir a mbar
+			press_bits = (uint32_t) (pressure_ms5611 * 100.0f); // si tu TLV espera centÃ©simas de mbar
+
+			float measured_angle = CMPS2_GetHeading();
+			const char *direccion_viento = CMPS2_DecodeHeading(measured_angle);
+			uint16_t mag_angle_scaled = (uint16_t) (measured_angle * 100.0f);
 
 			speed_scaled = (uint16_t) (gps_speed_kmh * 100.0f);
 			build_telemetry_payload(gps_has_fix, h, m, s, lat_int, lon_int,
 					alt_int, speed_scaled, imu.acc_x, imu.acc_y, imu.acc_z,
 					imu.gyr_x, imu.gyr_y, imu.gyr_z, temp_sht_bits, hum_bits,
+<<<<<<< HEAD
 					press_bits);
+=======
+					press_bits, mag_angle_scaled);
+>>>>>>> refs/heads/arreglos
 			char separador[100] =
 					"------------------------------------------------------------------------\r\n";
 			UART_Print(separador);
@@ -623,16 +620,18 @@ int main(void) {
 			UART_Print(debug_msg);
 			UART_Print(separador);
 
+			char ascii_msg[512];
 			// 1. Verificamos si pasaron más de 2 segundos sin datos (Desconectado)
 			if (HAL_GetTick() - last_gps_time > 2000) {
 				snprintf(ascii_msg, sizeof(ascii_msg),
 						"[GPS] Tx desconectado\r\n"
 								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
-								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n",
+								"[MS5611] Temperatura: %.2f C | Presión: %.2f\r\n"
+								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n",
 						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
 						imu.temp_BMI270, temperature_sht21, hum,
-						temperature_bmp280, pressure);
+						temperature_ms5611, pressure_ms5611, measured_angle, direccion_viento);
 			}
 			// 2. Verificamos si hay conexión y tenemos fix satelital
 			else if (gps_valid && fix_str[0] >= '1') {
@@ -640,11 +639,12 @@ int main(void) {
 						"[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
 								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
-								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n",
+								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n"
+								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n",
 						lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m,
 						s, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
 						imu.temp_BMI270, temperature_sht21, hum,
-						temperature_bmp280, pressure);
+						temperature_ms5611, pressure_ms5611, measured_angle, direccion_viento);
 			}
 			// 3. Hay conexión pero aún no hay fix
 			else {
@@ -652,10 +652,11 @@ int main(void) {
 						"[GPS] Buscando satelites...\r\n"
 								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
-								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n",
+								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n"
+								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n",
 						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
 						imu.temp_BMI270, temperature_sht21, hum,
-						temperature_bmp280, pressure);
+						temperature_ms5611, pressure_ms5611, measured_angle, direccion_viento);
 			}
 			char separador2[100] =
 					"------------------------------------------------------------------------\r\n\r\n";
