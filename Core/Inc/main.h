@@ -70,8 +70,8 @@ void Error_Handler(void);
 #define LED_RED_GPIO_Port GPIOA
 #define FREQ_HIGH_Pin GPIO_PIN_12
 #define FREQ_HIGH_GPIO_Port GPIOB
-#define LED_GREEN_Pin GPIO_PIN_10
-#define LED_GREEN_GPIO_Port GPIOA
+#define LED_GREEN_Pin GPIO_PIN_14
+#define LED_GREEN_GPIO_Port GPIOB
 #define LED_BLUE_Pin GPIO_PIN_12
 #define LED_BLUE_GPIO_Port GPIOA
 #define RF_SW_CTRL2_Pin GPIO_PIN_13

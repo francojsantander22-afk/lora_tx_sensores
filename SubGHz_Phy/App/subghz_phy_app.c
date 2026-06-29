@@ -245,14 +245,14 @@ void Aplicar_Nuevos_Parametros(void) {
 	Radio.SetChannel(Conf_Frequency);
 
 	Radio.SetTxConfig(MODEM_LORA, TX_OUTPUT_POWER, 0, Conf_Bandwidth, Conf_SF,
-			LORA_CODINGRATE,
-			LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
-			true, 0, 0, LORA_IQ_INVERSION_ON, TX_TIMEOUT_VALUE);
+	LORA_CODINGRATE,
+	LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
+	true, 0, 0, LORA_IQ_INVERSION_ON, TX_TIMEOUT_VALUE);
 
 	Radio.SetRxConfig(MODEM_LORA, Conf_Bandwidth, Conf_SF,
 	LORA_CODINGRATE, 0, LORA_PREAMBLE_LENGTH,
 	LORA_SYMBOL_TIMEOUT, LORA_FIX_LENGTH_PAYLOAD_ON, 0, true, 0, 0,
-			LORA_IQ_INVERSION_ON, true);
+	LORA_IQ_INVERSION_ON, true);
 
 	Radio.SetMaxPayloadLength(MODEM_LORA, Conf_PayloadLen);
 	APP_LOG(TS_ON, VLEVEL_M, "Radio actualizada: FR=%d | SF=%d | BW=%d\r\n",
@@ -266,7 +266,6 @@ void SubghzApp_Init(void) {
 	/* USER CODE BEGIN SubghzApp_Init_1 */
 
 	//UTIL_TIMER_Create(&timerTxCycle, 5000, UTIL_TIMER_ONESHOT, OnTxCycleEvent, NULL);
-
 	APP_LOG(TS_OFF, VLEVEL_M, "\n\rPING PONG\n\r");
 	/* Get SubGHY_Phy APP version*/
 	APP_LOG(TS_OFF, VLEVEL_M, "APPLICATION_VERSION: V%X.%X.%X\r\n",
@@ -285,7 +284,7 @@ void SubghzApp_Init(void) {
 
 	/* Led Timers*/
 	UTIL_TIMER_Create(&timerLed, LED_PERIOD_MS, UTIL_TIMER_ONESHOT, OnledEvent,
-			NULL);
+	NULL);
 	UTIL_TIMER_Start(&timerLed);
 	/* USER CODE END SubghzApp_Init_1 */
 
@@ -315,14 +314,14 @@ void SubghzApp_Init(void) {
 
 	// Usamos Conf_Bandwidth y Conf_SF en lugar de las macros fijas
 	Radio.SetTxConfig(MODEM_LORA, TX_OUTPUT_POWER, 0, Conf_Bandwidth, Conf_SF,
-			LORA_CODINGRATE,
-			LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
-			true, 0, 0, LORA_IQ_INVERSION_ON, TX_TIMEOUT_VALUE);
+	LORA_CODINGRATE,
+	LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
+	true, 0, 0, LORA_IQ_INVERSION_ON, TX_TIMEOUT_VALUE);
 
 	Radio.SetRxConfig(MODEM_LORA, Conf_Bandwidth, Conf_SF,
 	LORA_CODINGRATE, 0, LORA_PREAMBLE_LENGTH,
 	LORA_SYMBOL_TIMEOUT, LORA_FIX_LENGTH_PAYLOAD_ON, 0, true, 0, 0,
-			LORA_IQ_INVERSION_ON, true);
+	LORA_IQ_INVERSION_ON, true);
 
 	/* 3. Aplicar el tamaño máximo de payload del menú */
 	Radio.SetMaxPayloadLength(MODEM_LORA, Conf_PayloadLen);
@@ -353,7 +352,9 @@ static void OnTxDone(void) {
 	/* USER CODE BEGIN OnTxDone */
 	APP_LOG(TS_ON, VLEVEL_L,
 			"OnTxDone: Transmision completada. Pasando a escuchar ACK...\n\r");
-
+	HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
+	HAL_Delay(50);
+	HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
 	/* CAMBIO AQUÍ: Seteamos estado RX y abrimos ventana de escucha en la radio */
 	State = RX;
 	//Radio.Rx(RX_TIMEOUT_VALUE);
@@ -412,14 +413,13 @@ static void OnTxTimeout(void) {
 	State = TX_TIMEOUT;
 	/* Run PingPong process in background*/
 	// UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
-
 	/* USER CODE END OnTxTimeout */
 }
 
 static void OnRxTimeout(void) {
 	/* USER CODE BEGIN OnRxTimeout */
 	APP_LOG(TS_ON, VLEVEL_L, "OnRxTimeout\n\r");
-	lora_busy=0;
+	lora_busy = 0;
 	/* Update the State of the FSM*/
 	State = RX_TIMEOUT;
 	/* Run PingPong process in background*/
@@ -482,8 +482,10 @@ static void PingPong_Process(void)  //funcion de tx del rak
 			// Comportamiento normal: Se recibió el ACK regular del Slave
 			APP_LOG(TS_ON, VLEVEL_L, "--- ACK RECIBIDO CON EXITO ---\n\r");
 			RxBufferSize = 0;
-			//HAL_Delay(3000); // Pausa de 3 segundos antes de mandar el próximo PING regular
-			lora_busy=0;
+			HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_SET);
+			HAL_Delay(50);
+			HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_RESET);
+			lora_busy = 0;
 			State = TX;
 			UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process),
 					CFG_SEQ_Prio_0);
@@ -511,11 +513,11 @@ static void PingPong_Process(void)  //funcion de tx del rak
 			Radio.Send(BufferTx, lora_tx_len);
 			tlv_ready = 0; /* consumido */
 		} //else {
-			/* Todavía no hay paquete nuevo — esperar y reintentar */
-			//APP_LOG(TS_ON, VLEVEL_L, "TX: Esperando paquete TLV...\n\r");
-			//HAL_Delay(100);
-			//UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
-			//UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
+		/* Todavía no hay paquete nuevo — esperar y reintentar */
+		//APP_LOG(TS_ON, VLEVEL_L, "TX: Esperando paquete TLV...\n\r");
+		//HAL_Delay(100);
+		//UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
+		//UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process), CFG_SEQ_Prio_0);
 		//}
 		break;
 
@@ -544,8 +546,9 @@ static void PingPong_Process(void)  //funcion de tx del rak
 }
 
 static void OnledEvent(void *context) {
-	HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin); /* LED_GREEN */
-	HAL_GPIO_TogglePin(LED_RED_GPIO_Port, LED_RED_Pin); /* LED_RED */
+	HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+	HAL_Delay(50);
+	HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
 	//UTIL_TIMER_Start(&timerLed);
 }
 
