@@ -37,24 +37,6 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
-/* --- Registros BMI270 --- */
-#define BMI270_I2C_ADDR    	(0x68 << 1)
-#define REG_CHIP_ID         0x00
-#define REG_PWR_CONF        0x7C
-#define REG_INIT_CTRL       0x59
-#define REG_INIT_DATA       0x5E
-#define REG_INTERNAL_STATUS 0x21
-#define REG_PWR_CTRL        0x7D
-#define REG_ACC_CONF        0x40
-#define REG_ACC_RANGE       0x41
-#define REG_DATA_8          0x0C
-#define REG_TEMP_LSB        0x22
-//Direcciones SHT21
-#define SHT21_I2C_ADDR   (0x40 << 1) // Dirección I2C desplazada 1 bit
-#define CMD_MEASURE_T    0xF3        // Trigger T measurement (no hold master)
-#define CMD_MEASURE_RH   0xF5        // Trigger RH measurement (no hold master)
-
 /* --- Estructura de datos GPS parseados --- */
 typedef struct {
 	uint8_t valid; /* 1 = fix confirmado, 0 = sin fix */
@@ -81,6 +63,26 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+/* --- Registros BMI270 --- */
+#define BMI270_I2C_ADDR     (0x68 << 1)
+#define REG_CHIP_ID         0x00
+#define REG_PWR_CONF        0x7C
+#define REG_INIT_CTRL       0x59
+#define REG_INIT_DATA       0x5E
+#define REG_INTERNAL_STATUS 0x21
+#define REG_PWR_CTRL        0x7D
+#define REG_ACC_CONF        0x40
+#define REG_ACC_RANGE       0x41
+#define REG_DATA_8          0x0C
+#define REG_TEMP_LSB        0x22
+
+// Direcciones SHT21
+#define SHT21_I2C_ADDR      (0x40 << 1) // Dirección I2C desplazada 1 bit
+#define CMD_MEASURE_T       0xF3        // Trigger T measurement (no hold master)
+#define CMD_MEASURE_RH      0xF5        // Trigger RH measurement (no hold master)
+
+/* --- Buffer circular UART para GPS --- */
+#define RX_BUF_SIZE 512
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -92,7 +94,6 @@ typedef struct {
 /* USER CODE BEGIN PV */
 
 /* --- Buffer circular UART para GPS --- */
-#define RX_BUF_SIZE 512
 extern volatile uint8_t rx_buffer[RX_BUF_SIZE];
 extern volatile uint16_t rx_head;
 extern volatile uint16_t rx_tail;
@@ -112,8 +113,8 @@ uint8_t lora_tx_len = 0;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-/* USER CODE BEGIN PFP */
 
+/* USER CODE BEGIN PFP */
 /* Utilidades UART */
 void UART_Print(const char *msg);
 
@@ -123,7 +124,24 @@ uint8_t BMI270_ReadReg(uint8_t reg);
 void BMI270_ReadRegs(uint8_t reg, uint8_t *data, uint16_t len);
 HAL_StatusTypeDef BMI270_LoadConfigFile(void);
 float BMI270_ReadTemperature(void);
+void BMI270_Get_Data(BMI270_Data_t *imu_data);
 
+/* SHT21 */
+void SHT21_Read(float *temperature, float *humidity);
+
+/* GPS & LORA TLV */
+void get_nmea_field(const char *nmea, uint8_t field_num, char *result);
+void tlv_pack_16(uint8_t type, uint16_t val);
+void tlv_pack_32(uint8_t type, uint32_t val);
+void tlv_pack_time(uint8_t type, uint8_t h, uint8_t m, uint8_t s);
+void tlv_pack_xyz(uint8_t type, int16_t x, int16_t y, int16_t z);
+void tlv_pack_gps_coords(uint8_t type, int32_t lat, int32_t lon);
+int32_t nmea_to_int32(char *coord_str, char dir);
+uint8_t build_telemetry_payload(uint8_t gps_has_fix, uint8_t h, uint8_t m,
+		uint8_t s, int32_t lat, int32_t lon, int16_t alt, uint16_t speed,
+		int16_t acc_x, int16_t acc_y, int16_t acc_z, int16_t gyr_x,
+		int16_t gyr_y, int16_t gyr_z, int16_t temp_sht, uint16_t hum_sht,
+		uint32_t pressure, uint16_t mag_angle);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -452,13 +470,19 @@ int main(void) {
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
+		/* USER CODE END WHILE */
+
+		/* USER CODE BEGIN 3 */
+
 		uint8_t trigger_telemetry = 0;
 		uint8_t gps_valid = 0;
+
 		/* Watchdog ISR */
 		if (huart1.RxState == HAL_UART_STATE_READY) {
 			HAL_UART_Receive_IT(&huart1, (uint8_t*) &rx_byte, 1);
 			HAL_UART_Receive_IT(&huart1, (uint8_t*) &rx_byte, 1);
 		}
+
 		/* TAREA 1: GPS — solo si no hay paquete pendiente */
 		if (rx_head != rx_tail) {
 			char c = (char) rx_buffer[rx_tail];
@@ -498,6 +522,7 @@ int main(void) {
 				last_imu_time = HAL_GetTick();
 			}
 		}
+
 		//GPS//
 		if (trigger_telemetry == 1 && lora_busy == 0) {
 			lora_tx_len = 0;
@@ -548,6 +573,7 @@ int main(void) {
 			float gx_dps = imu.gyr_x / 16.4f;
 			float gy_dps = imu.gyr_y / 16.4f;
 			float gz_dps = imu.gyr_z / 16.4f;
+
 			//SHT21//
 			SHT21_Read(&temperature_sht21, &hum);
 			int16_t temp_sht_bits = (int16_t) (temperature_sht21 * 100.0f);
@@ -561,7 +587,7 @@ int main(void) {
 
 			MS5611_Measure(&hi2c3, &temperature_ms5611, &pressure_pa);
 			pressure_ms5611 = pressure_pa / 100.0f;  // convertir a mbar
-			press_bits = (uint32_t) (pressure_ms5611 * 100.0f); // si tu TLV espera centÃ©simas de mbar
+			press_bits = (uint32_t) (pressure_ms5611 * 100.0f); // si tu TLV espera centésimas de mbar
 
 			float measured_angle = CMPS2_GetHeading();
 			const char *direccion_viento = CMPS2_DecodeHeading(measured_angle);
@@ -572,6 +598,7 @@ int main(void) {
 					alt_int, speed_scaled, imu.acc_x, imu.acc_y, imu.acc_z,
 					imu.gyr_x, imu.gyr_y, imu.gyr_z, temp_sht_bits, hum_bits,
 					press_bits, mag_angle_scaled);
+
 			char separador[100] =
 					"------------------------------------------------------------------------\r\n";
 			UART_Print(separador);
@@ -599,7 +626,8 @@ int main(void) {
 								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n",
 						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
 						imu.temp_BMI270, temperature_sht21, hum,
-						temperature_ms5611, pressure_ms5611, measured_angle, direccion_viento);
+						temperature_ms5611, pressure_ms5611, measured_angle,
+						direccion_viento);
 			}
 			// 2. Verificamos si hay conexión y tenemos fix satelital
 			else if (gps_valid && fix_str[0] >= '1') {
@@ -612,7 +640,8 @@ int main(void) {
 						lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m,
 						s, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
 						imu.temp_BMI270, temperature_sht21, hum,
-						temperature_ms5611, pressure_ms5611, measured_angle, direccion_viento);
+						temperature_ms5611, pressure_ms5611, measured_angle,
+						direccion_viento);
 			}
 			// 3. Hay conexión pero aún no hay fix
 			else {
@@ -624,23 +653,25 @@ int main(void) {
 								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n",
 						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
 						imu.temp_BMI270, temperature_sht21, hum,
-						temperature_ms5611, pressure_ms5611, measured_angle, direccion_viento);
+						temperature_ms5611, pressure_ms5611, measured_angle,
+						direccion_viento);
 			}
+
 			char separador2[100] =
 					"------------------------------------------------------------------------\r\n\r\n";
 			UART_Print(ascii_msg);
 			UART_Print(separador2);
+
 			tlv_ready = 1;
 			UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process),
 					CFG_SEQ_Prio_0);
 		}
-		MX_SubGHz_Phy_Process();
-	}
 
-	/* USER CODE END WHILE */
-	/* USER CODE BEGIN 3 */
+		MX_SubGHz_Phy_Process();
+
+	}
+	/* USER CODE END 3 */
 }
-/* USER CODE END 3 */
 
 /**
  * @brief System Clock Configuration
