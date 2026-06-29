@@ -24,6 +24,7 @@
 #include "gpio.h"
 #include "stm32_seq.h"
 #include "utilities_def.h"
+#include "adc.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
@@ -54,7 +55,17 @@
 #define SHT21_I2C_ADDR   (0x40 << 1) // Dirección I2C desplazada 1 bit
 #define CMD_MEASURE_T    0xF3        // Trigger T measurement (no hold master)
 #define CMD_MEASURE_RH   0xF5        // Trigger RH measurement (no hold master)
-
+//baterias
+#define VREF              3.3f
+#define ADC_BITS          4096
+#define R1                100000.0f
+#define R2                220000.0f
+#define NUM_MUESTRAS      10
+#define INTERVALO_MS      500
+#define LM35_MV_POR_C     10.0f
+#define TEMP_ON           25.0f
+#define TEMP_OFF          22.0f
+#define ALPHA  0.1f   // factor del filtro: 0.1 = muy suave, 0.3 = más rápido
 /* --- Estructura de datos GPS parseados --- */
 typedef struct {
 	uint8_t valid; /* 1 = fix confirmado, 0 = sin fix */
@@ -90,6 +101,7 @@ typedef struct {
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+extern ADC_HandleTypeDef hadc;
 
 /* --- Buffer circular UART para GPS --- */
 #define RX_BUF_SIZE 512
@@ -108,6 +120,18 @@ uint8_t line_index = 0;
 uint8_t lora_tx_buffer[128];
 uint8_t lora_tx_len = 0;
 
+static float vbatFiltrado = 0.0f;
+
+typedef struct {
+	float voltaje;
+	uint8_t porcentaje;
+} PuntoSoC;
+
+static const PuntoSoC tablaSoC[] =
+		{ { 4.20f, 100 }, { 4.10f, 90 }, { 4.00f, 80 }, { 3.90f, 70 }, { 3.80f,
+				60 }, { 3.70f, 45 }, { 3.60f, 30 }, { 3.50f, 20 },
+				{ 3.40f, 10 }, { 3.20f, 5 }, { 3.00f, 0 }, };
+static const uint8_t PUNTOS_SOC = sizeof(tablaSoC) / sizeof(tablaSoC[0]);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -217,7 +241,47 @@ void SHT21_Read(float *temperature, float *humidity) {
 	raw_val = (data[0] << 8) | (data[1] & 0xFC); // Unimos los bytes y ponemos a '0' los últimos 2 bits de estado
 	*humidity = -6.0 + 125.0 * ((float) raw_val / 65536.0);	// Aplicamos la fórmula del datasheet
 }
+uint32_t leerCanalADC(uint32_t canal) {
+	ADC_ChannelConfTypeDef sConfig = { 0 };
+	sConfig.Channel = canal;
+	sConfig.Rank = ADC_REGULAR_RANK_1;
+	sConfig.SamplingTime = ADC_SAMPLINGTIME_COMMON_1;
+	HAL_ADC_ConfigChannel(&hadc, &sConfig);
 
+	HAL_ADC_Start(&hadc);
+	HAL_ADC_PollForConversion(&hadc, 100);
+	uint32_t valor = HAL_ADC_GetValue(&hadc);
+	HAL_ADC_Stop(&hadc);
+
+	return valor;
+}
+float leerVoltajeBateria(void) {
+	uint32_t suma = 0;
+	for (uint8_t i = 0; i < NUM_MUESTRAS; i++) {
+		suma += leerCanalADC(ADC_CHANNEL_4); /* PB1 = ADC_IN5 */
+		HAL_Delay(5);
+	}
+	float rawProm = (float) suma / NUM_MUESTRAS;
+	float vPin = (rawProm / ADC_BITS) * VREF;
+	return vPin * (R1 + R2) / R2;
+}
+uint8_t voltajeASoC(float voltaje) {
+	if (voltaje >= tablaSoC[0].voltaje)
+		return 100;
+	if (voltaje <= tablaSoC[PUNTOS_SOC - 1].voltaje)
+		return 0;
+
+	for (uint8_t i = 0; i < PUNTOS_SOC - 1; i++) {
+		if (voltaje <= tablaSoC[i].voltaje
+				&& voltaje >= tablaSoC[i + 1].voltaje) {
+			float rango_v = tablaSoC[i].voltaje - tablaSoC[i + 1].voltaje;
+			float rango_p = tablaSoC[i].porcentaje - tablaSoC[i + 1].porcentaje;
+			float fraccion = (voltaje - tablaSoC[i + 1].voltaje) / rango_v;
+			return (uint8_t) (tablaSoC[i + 1].porcentaje + fraccion * rango_p);
+		}
+	}
+	return 0;
+}
 /* =========================================================
  *  GPS – parseo NMEA robusto
  * ========================================================= */
@@ -234,7 +298,12 @@ void get_nmea_field(const char *nmea, uint8_t field_num, char *result) {
 	}
 	result[j] = '\0';
 }
-
+//empaquetar 1 byte
+void tlv_pack_8(uint8_t type, uint8_t val) {
+	lora_tx_buffer[lora_tx_len++] = type;
+	lora_tx_buffer[lora_tx_len++] = 1; // Longitud: 1 byte
+	lora_tx_buffer[lora_tx_len++] = val;
+}
 // Empaquetar 2 Bytes
 void tlv_pack_16(uint8_t type, uint16_t val) {
 	lora_tx_buffer[lora_tx_len++] = type;
@@ -319,7 +388,7 @@ uint8_t build_telemetry_payload(uint8_t gps_has_fix, uint8_t h, uint8_t m,
 		uint8_t s, int32_t lat, int32_t lon, int16_t alt, uint16_t speed,
 		int16_t acc_x, int16_t acc_y, int16_t acc_z, int16_t gyr_x,
 		int16_t gyr_y, int16_t gyr_z, int16_t temp_sht, uint16_t hum_sht,
-		uint32_t pressure, uint16_t mag_angle) {
+		uint32_t pressure, uint16_t vbat_mv, uint8_t soc, uint16_t mag_angle) {
 	lora_tx_len = 0; // Reiniciar el puntero del búfer global
 
 	// 1. Datos GPS (Solo se agregan si hay satélites válidos)
@@ -339,6 +408,8 @@ uint8_t build_telemetry_payload(uint8_t gps_has_fix, uint8_t h, uint8_t m,
 	tlv_pack_16(0x07, temp_sht);
 	tlv_pack_16(0x08, hum_sht);
 	tlv_pack_32(0x09, pressure);
+	tlv_pack_16(0x0B, vbat_mv);
+	tlv_pack_8(0x0C, soc);
 	tlv_pack_16(0x0D, mag_angle);
 
 	return lora_tx_len; // Devuelve el tamaño final del paquete
@@ -372,6 +443,7 @@ int main(void) {
 	MX_I2C3_Init();
 	MX_USART1_UART_Init();
 	MX_USART2_UART_Init();
+	MX_ADC_Init();
 	/* USER CODE BEGIN 2 */
 	HAL_Delay(3000);
 	UART_Print("Inicializando sistema...\r\n");
@@ -565,12 +637,26 @@ int main(void) {
 			float measured_angle = CMPS2_GetHeading();
 			const char *direccion_viento = CMPS2_DecodeHeading(measured_angle);
 			uint16_t mag_angle_scaled = (uint16_t) (measured_angle * 100.0f);
-
 			speed_scaled = (uint16_t) (gps_speed_kmh * 100.0f);
+
+			float voltajeCrudo = leerVoltajeBateria();
+
+			// Filtro exponencial: suaviza la lectura entre ciclos
+			if (vbatFiltrado == 0.0f)
+				vbatFiltrado = voltajeCrudo; // inicialización en el primer ciclo
+			else
+				vbatFiltrado = ALPHA * voltajeCrudo
+						+ (1.0f - ALPHA) * vbatFiltrado;
+
+			float voltaje = vbatFiltrado;
+			uint8_t soc = voltajeASoC(voltaje);
+			uint16_t vbat_mv = (uint16_t) (voltaje * 1000.0f);
+
 			build_telemetry_payload(gps_has_fix, h, m, s, lat_int, lon_int,
 					alt_int, speed_scaled, imu.acc_x, imu.acc_y, imu.acc_z,
 					imu.gyr_x, imu.gyr_y, imu.gyr_z, temp_sht_bits, hum_bits,
-					press_bits, mag_angle_scaled);
+					press_bits, vbat_mv, soc, mag_angle_scaled);
+
 			char separador[100] =
 					"------------------------------------------------------------------------\r\n";
 			UART_Print(separador);
@@ -595,10 +681,11 @@ int main(void) {
 								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
 								"[MS5611] Temperatura: %.2f C | Presión: %.2f\r\n"
-								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n",
-						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
-						imu.temp_BMI270, temperature_sht21, hum,
-						temperature_ms5611, pressure_ms5611, measured_angle, direccion_viento);
+								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n"
+								"VBAT: %.3f V | SOC: %u%%\r\n", ax_g, ay_g,
+						az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
+						temperature_sht21, hum, temperature_ms5611,
+						pressure_ms5611, measured_angle, direccion_viento,voltaje, soc);
 			}
 			// 2. Verificamos si hay conexión y tenemos fix satelital
 			else if (gps_valid && fix_str[0] >= '1') {
@@ -607,11 +694,12 @@ int main(void) {
 								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
 								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n"
-								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n",
-						lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m,
-						s, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
-						imu.temp_BMI270, temperature_sht21, hum,
-						temperature_ms5611, pressure_ms5611, measured_angle, direccion_viento);
+								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n"
+								"VBAT: %.3f V | SOC: %u%%\r\n", lat_str, ns,
+						lon_str, ew, alt_str, gps_speed_kmh, h, m, s, ax_g,
+						ay_g, az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
+						temperature_sht21, hum, temperature_ms5611,
+						pressure_ms5611, measured_angle, direccion_viento,voltaje, soc);
 			}
 			// 3. Hay conexión pero aún no hay fix
 			else {
@@ -620,10 +708,11 @@ int main(void) {
 								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
 								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n"
-								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n",
-						ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps,
-						imu.temp_BMI270, temperature_sht21, hum,
-						temperature_ms5611, pressure_ms5611, measured_angle, direccion_viento);
+								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n"
+								"VBAT: %.3f V | SOC: %u%%\r\n", ax_g, ay_g,
+						az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
+						temperature_sht21, hum, temperature_ms5611,
+						pressure_ms5611, measured_angle, direccion_viento,voltaje, soc);
 			}
 			char separador2[100] =
 					"------------------------------------------------------------------------\r\n\r\n";
