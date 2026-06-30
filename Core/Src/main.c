@@ -460,21 +460,6 @@ int main(void) {
 	CMPS2_Init(&hi2c3);
 	MS5611_Init(&hi2c3, 0);
 	UART_Print("Scan completo.\r\n");
-	// 1. Habilitar el reloj del puerto correspondiente
-	__HAL_RCC_GPIOB_CLK_ENABLE();// Ojo: Cambiar si usas GPIOA, GPIOC, etc.
-
-	// 2. Configurar el pin
-	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
-	GPIO_InitStruct.Pin = LED_BLUE_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-
-	// 3. Aplicar configuración
-	HAL_GPIO_Init(LED_BLUE_GPIO_Port, &GPIO_InitStruct);
-
-	// 4. Iniciar con el LED apagado
-	HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_RESET);
 
 	float temperature_sht21, hum;
 	float gps_speed_kmh = 0.0f;

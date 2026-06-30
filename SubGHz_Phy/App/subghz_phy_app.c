@@ -352,9 +352,9 @@ static void OnTxDone(void) {
 	/* USER CODE BEGIN OnTxDone */
 	APP_LOG(TS_ON, VLEVEL_L,
 			"OnTxDone: Transmision completada. Pasando a escuchar ACK...\n\r");
-	HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-	HAL_Delay(50);
-	HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
+	HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET);
+	HAL_Delay(150);
+	HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_RESET);
 	/* CAMBIO AQUÍ: Seteamos estado RX y abrimos ventana de escucha en la radio */
 	State = RX;
 	//Radio.Rx(RX_TIMEOUT_VALUE);
@@ -482,9 +482,10 @@ static void PingPong_Process(void)  //funcion de tx del rak
 			// Comportamiento normal: Se recibió el ACK regular del Slave
 			APP_LOG(TS_ON, VLEVEL_L, "--- ACK RECIBIDO CON EXITO ---\n\r");
 			RxBufferSize = 0;
-			HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_SET);
-			HAL_Delay(50);
-			HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+			HAL_Delay(150);
+			HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin,
+					GPIO_PIN_RESET);
 			lora_busy = 0;
 			State = TX;
 			UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_SubGHz_Phy_App_Process),

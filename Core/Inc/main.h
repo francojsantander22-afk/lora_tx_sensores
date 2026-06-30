@@ -66,14 +66,14 @@ void Error_Handler(void);
 #define TX2_GPIO_Port GPIOA
 #define RX2_Pin GPIO_PIN_3
 #define RX2_GPIO_Port GPIOA
-#define LED_RED_Pin GPIO_PIN_9
-#define LED_RED_GPIO_Port GPIOA
+#define LED_RED_Pin GPIO_PIN_5
+#define LED_RED_GPIO_Port GPIOB
 #define FREQ_HIGH_Pin GPIO_PIN_12
 #define FREQ_HIGH_GPIO_Port GPIOB
-#define LED_GREEN_Pin GPIO_PIN_14
+#define LED_GREEN_Pin GPIO_PIN_1
 #define LED_GREEN_GPIO_Port GPIOB
-#define LED_BLUE_Pin GPIO_PIN_12
-#define LED_BLUE_GPIO_Port GPIOA
+#define LED_WHITE_Pin GPIO_PIN_8
+#define LED_WHITE_GPIO_Port GPIOA
 #define RF_SW_CTRL2_Pin GPIO_PIN_13
 #define RF_SW_CTRL2_GPIO_Port GPIOC
 
