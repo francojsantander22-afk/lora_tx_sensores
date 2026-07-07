@@ -1,4 +1,4 @@
-# HAPS — Nodo Sensor y Enlace LoRa (STM32WL55)
+# HABP — Nodo Sensor y Enlace LoRa (STM32WL55)
 ### Sistema de Adquisición de Datos y Posicionamiento para Globo Estratosférico de Alta Altitud
 
 ![Plataforma](https://img.shields.io/badge/MCU-STM32WL55-03234B?logo=stmicroelectronics&logoColor=white)
@@ -6,7 +6,7 @@
 ![IDE](https://img.shields.io/badge/IDE-STM32CubeIDE-blue)
 ![Estado](https://img.shields.io/badge/Estado-En%20desarrollo-yellow)
 
-Firmware del **nodo transmisor de telemetría** para HAPS (*High Altitude Platform System*), un proyecto de globo sonda estratosférico desarrollado en **CEGA Electrónica**. El nodo adquiere variables ambientales, inerciales y de posicionamiento durante el vuelo, las empaqueta en un protocolo binario propio y las transmite a una estación terrena mediante radiofrecuencia LoRa.
+Firmware del **nodo transmisor de telemetría** para HABS (*High Altitude Balloon System*), un proyecto de globo sonda estratosférico desarrollado en **CEGA Electrónica**. El nodo adquiere variables ambientales, inerciales y de posicionamiento durante el vuelo, las empaqueta en un protocolo binario propio y las transmite a una estación terrena mediante radiofrecuencia LoRa.
 
 <p align="center">
   <img src="images/diagrama.png" alt="Diagrama en bloques del sistema" width="700">
@@ -248,6 +248,4 @@ lora_tx_sensores/
 
 ## Autores
 
-**Franco Santander** · **Lisandro Elmelaj** — CEGA Electrónica, proyecto HAPS (High Altitude Platform System)
-
-> 📎 Nota: agregar las imágenes referenciadas (`diagrama.png`, `kg200z.png`, `bmi270.jpg`, `sht20.jpg`, `ms5611.jpg`, `cmps2.png`, `atgm336h.jpg`, fotos de prototipo, `top.png`/`bottom.png`/`topbottom.png`, `3dz.png`/`3dzback.png`) dentro de una carpeta `images/` en la raíz del repo — son las mismas que ya tenés preparadas para el informe en LaTeX.
+**Franco Santander** · **Lisandro Elmelaj** — CEGA Electrónica, proyecto HABS (High Altitude Balloon System)
