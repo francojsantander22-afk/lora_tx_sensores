@@ -168,6 +168,40 @@ Modelo **productor-consumidor** sincronizado, pensado para evitar condiciones de
 6. **Timeout** → se descarta el paquete, se alerta por consola (*"Master Alerta: Sin respuesta"*), se libera el candado y se toman datos frescos del GPS/IMU para el siguiente intento (evitando reenviar telemetría desactualizada).
 
 ---
+## Output de consola
+
+En la consola de depuración (USART2) siempre se pueden visualizar los datos empaquetados en TLV, pero además el sistema muestra tres salidas distintas según el estado del GPS.
+
+### GPS buscando satélites
+
+Es el caso más común apenas arranca el sistema, mientras el receptor todavía no logró fijar posición:
+
+<p align="center">
+  <img src="images/sin_fix.png" alt="GPS buscando satélite" width="700">
+  <br>
+  <em>GPS buscando satélite</em>
+</p>
+
+### GPS desconectado
+
+Se da cuando el módulo GPS está desconectado. El firmware usa `HAL_GetTick()` para determinar el último *fix* válido e imprime en consola el estado correspondiente:
+
+<p align="center">
+  <img src="images/tx_desconectado.png" alt="GPS desconectado" width="700">
+  <br>
+  <em>GPS desconectado</em>
+</p>
+
+### Geolocalización encontrada
+
+Con *fix* satelital, la consola muestra las variables entregadas por el módulo GPS: Latitud, Longitud, Altitud, Velocidad, Hora, entre otras:
+
+<p align="center">
+  <img src="images/fix.png" alt="Geolocalización" width="700">
+  <br>
+  <em>Geolocalización</em>
+</p>
+
 
 ## Diseño de PCB
 

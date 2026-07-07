@@ -75,8 +75,8 @@ all: main-build
 main-build: LoRa_TX.elf secondary-outputs
 
 # Tool invocations
-LoRa_TX.elf LoRa_TX.map: $(OBJS) $(USER_OBJS) /home/ll3san/Documents/HAPS/LoRa_Tx-Sensores/STM32WLE5CCUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "LoRa_TX.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"/home/ll3san/Documents/HAPS/LoRa_Tx-Sensores/STM32WLE5CCUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="LoRa_TX.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
+LoRa_TX.elf LoRa_TX.map: $(OBJS) $(USER_OBJS) C:\Users\franc\Desktop\LoRa_Tx-Sensores\STM32WLE5CCUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "LoRa_TX.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\franc\Desktop\LoRa_Tx-Sensores\STM32WLE5CCUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="LoRa_TX.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

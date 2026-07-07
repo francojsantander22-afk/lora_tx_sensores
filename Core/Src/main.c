@@ -479,7 +479,7 @@ int main(void) {
 	MS5611_Init(&hi2c3, 0);
 
 	float temperature_sht21, hum;
-	uint8_t heat_on = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13);   // PB13 = heater
+	//uint8_t heat_on = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13);   // PB13 = heater
 	float gps_speed_kmh = 0.0f;
 	/* --- Inicialización BMI270 --- */
 	uint8_t chip_id = BMI270_ReadReg(REG_CHIP_ID);
@@ -580,7 +580,7 @@ int main(void) {
 
 		/* TAREA 2: Watchdog */
 		if (lora_busy == 0) {
-			if (HAL_GetTick() - last_gps_time > 2000) {
+			if (HAL_GetTick() - last_gps_time > 3000) {
 				if (HAL_GetTick() - last_imu_time > 1000) {
 					last_imu_time = HAL_GetTick();
 					trigger_telemetry = 1;
@@ -701,16 +701,15 @@ int main(void) {
 
 			char ascii_msg[512];
 			// 1. Verificamos si pasaron más de 2 segundos sin datos (Desconectado)
-			if (HAL_GetTick() - last_gps_time > 2000) {
+			if (HAL_GetTick() - last_gps_time > 3000) {
 				snprintf(ascii_msg, sizeof(ascii_msg),
-				        "[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
+				        "[GPS] Tx desconectado\r\n"
 				        "[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 				        "[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
 				        "[MS5611] Temperatura: %.2f C | Presión: %.2f\r\n"
 				        "[CMPS2]  Ángulo: %.2f ° Dirreción: %s"
 				        "[DS18B20] Bateria: %.2f C | Heater: %s\r\n"
 				        "VBAT: %.3f V | SOC: %u%%\r\n",
-				        lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m, s,
 				        ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
 				        temperature_sht21, hum, temperature_ms5611,
 				        pressure_ms5611, measured_angle, direccion_viento,
@@ -735,14 +734,13 @@ int main(void) {
 			// 3. Hay conexión pero aún no hay fix
 			else {
 				snprintf(ascii_msg, sizeof(ascii_msg),
-				        "[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
+				        "[GPS] Buscando satelite....\r\n"
 				        "[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
 				        "[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
 				        "[MS5611] Temperatura: %.2f C | Presión: %.2f\r\n"
 				        "[CMPS2]  Ángulo: %.2f ° Dirreción: %s"
 				        "[DS18B20] Bateria: %.2f C | Heater: %s\r\n"
 				        "VBAT: %.3f V | SOC: %u%%\r\n",
-				        lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m, s,
 				        ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
 				        temperature_sht21, hum, temperature_ms5611,
 				        pressure_ms5611, measured_angle, direccion_viento,
