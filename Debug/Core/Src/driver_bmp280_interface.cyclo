@@ -1,0 +1,10 @@
+../Core/Src/driver_bmp280_interface.c:52:9:bmp280_interface_iic_init	1
+../Core/Src/driver_bmp280_interface.c:63:9:bmp280_interface_iic_deinit	1
+../Core/Src/driver_bmp280_interface.c:78:9:bmp280_interface_iic_read	2
+../Core/Src/driver_bmp280_interface.c:100:9:bmp280_interface_iic_write	2
+../Core/Src/driver_bmp280_interface.c:117:9:bmp280_interface_spi_init	1
+../Core/Src/driver_bmp280_interface.c:128:9:bmp280_interface_spi_deinit	1
+../Core/Src/driver_bmp280_interface.c:142:9:bmp280_interface_spi_read	1
+../Core/Src/driver_bmp280_interface.c:156:9:bmp280_interface_spi_write	1
+../Core/Src/driver_bmp280_interface.c:165:6:bmp280_interface_delay_ms	1
+../Core/Src/driver_bmp280_interface.c:174:6:bmp280_interface_debug_print	1

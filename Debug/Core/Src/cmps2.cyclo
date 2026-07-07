@@ -1,0 +1,5 @@
+../Core/Src/cmps2.c:10:6:CMPS2_Init	2
+../Core/Src/cmps2.c:32:6:CMPS2_Set	2
+../Core/Src/cmps2.c:50:6:CMPS2_Read_XYZ	9
+../Core/Src/cmps2.c:98:7:CMPS2_GetHeading	5
+../Core/Src/cmps2.c:151:13:CMPS2_DecodeHeading	9
