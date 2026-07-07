@@ -1,0 +1,5 @@
+../Core/Src/cmps2.c:10:6:CMPS2_Init	40	static
+../Core/Src/cmps2.c:32:6:CMPS2_Set	40	static
+../Core/Src/cmps2.c:50:6:CMPS2_Read_XYZ	56	static
+../Core/Src/cmps2.c:98:7:CMPS2_GetHeading	32	static
+../Core/Src/cmps2.c:151:13:CMPS2_DecodeHeading	16	static

@@ -62,10 +62,15 @@
 #define R2                220000.0f
 #define NUM_MUESTRAS      10
 #define INTERVALO_MS      500
-#define LM35_MV_POR_C     10.0f
-#define TEMP_ON           25.0f
-#define TEMP_OFF          22.0f
-#define ALPHA  0.1f   // factor del filtro: 0.1 = muy suave, 0.3 = más rápido
+#define TEMP_ON           10.0f
+#define TEMP_OFF          20.0f
+#define ALPHA  0.2f   // factor del filtro: 0.1 = muy suave, 0.3 = más rápido
+
+#define OW_PORT   GPIOA
+#define OW_PIN    GPIO_PIN_0
+#define OW_LOW()      (OW_PORT->BRR  = OW_PIN)            // tira la línea a 0
+#define OW_RELEASE()  (OW_PORT->BSRR = OW_PIN)           // libera (sube por el pull-up)
+#define OW_READ()     ((OW_PORT->IDR & OW_PIN) ? 1U : 0U)
 /* --- Estructura de datos GPS parseados --- */
 typedef struct {
 	uint8_t valid; /* 1 = fix confirmado, 0 = sin fix */
@@ -123,14 +128,15 @@ uint8_t lora_tx_len = 0;
 static float vbatFiltrado = 0.0f;
 
 typedef struct {
-	float voltaje;
-	uint8_t porcentaje;
-} PuntoSoC;
+	float voltaje; uint8_t porcentaje; }
+PuntoSoC;
 
-static const PuntoSoC tablaSoC[] =
-		{ { 4.20f, 100 }, { 4.10f, 90 }, { 4.00f, 80 }, { 3.90f, 70 }, { 3.80f,
-				60 }, { 3.70f, 45 }, { 3.60f, 30 }, { 3.50f, 20 },
-				{ 3.40f, 10 }, { 3.20f, 5 }, { 3.00f, 0 }, };
+static const PuntoSoC tablaSoC[] = {
+  { 4.20f, 100 }, { 4.10f, 90 }, { 4.00f, 80 },
+  { 3.90f,  70 }, { 3.80f, 60 }, { 3.70f, 50 },
+  { 3.60f,  40 }, { 3.50f, 30 }, { 3.40f, 20 },
+  { 3.30f,   10 }, { 3.00f,  0 },
+};
 static const uint8_t PUNTOS_SOC = sizeof(tablaSoC) / sizeof(tablaSoC[0]);
 /* USER CODE END PV */
 
@@ -147,6 +153,9 @@ uint8_t BMI270_ReadReg(uint8_t reg);
 void BMI270_ReadRegs(uint8_t reg, uint8_t *data, uint16_t len);
 HAL_StatusTypeDef BMI270_LoadConfigFile(void);
 float BMI270_ReadTemperature(void);
+/*ahora 1/7*/
+float leerTemperaturaDS18B20(void);
+void     controlheat(float temp);
 
 /* USER CODE END PFP */
 
@@ -202,8 +211,7 @@ HAL_StatusTypeDef BMI270_LoadConfigFile(void) {
 
 	if (status != HAL_OK) {
 		char err[60];
-		snprintf(err, sizeof(err),
-				"   [!] Error I2C en burst write. Codigo HAL: %d\r\n", status);
+		snprintf(err, sizeof(err),	"   [!] Error I2C en burst write. Codigo HAL: %d\r\n", status);
 		UART_Print(err);
 		return status;
 	}
@@ -258,7 +266,7 @@ uint32_t leerCanalADC(uint32_t canal) {
 float leerVoltajeBateria(void) {
 	uint32_t suma = 0;
 	for (uint8_t i = 0; i < NUM_MUESTRAS; i++) {
-		suma += leerCanalADC(ADC_CHANNEL_4); /* PB1 = ADC_IN5 */
+		suma += leerCanalADC(ADC_CHANNEL_4); /* PB2 = ADC_IN4 */
 		HAL_Delay(5);
 	}
 	float rawProm = (float) suma / NUM_MUESTRAS;
@@ -388,7 +396,8 @@ uint8_t build_telemetry_payload(uint8_t gps_has_fix, uint8_t h, uint8_t m,
 		uint8_t s, int32_t lat, int32_t lon, int16_t alt, uint16_t speed,
 		int16_t acc_x, int16_t acc_y, int16_t acc_z, int16_t gyr_x,
 		int16_t gyr_y, int16_t gyr_z, int16_t temp_sht, uint16_t hum_sht,
-		uint32_t pressure, uint16_t vbat_mv, uint8_t soc, uint16_t mag_angle) {
+		uint32_t pressure, uint16_t vbat_mv, uint8_t soc, uint16_t mag_angle,
+				int16_t temp_bat, uint8_t heat_on)  {
 	lora_tx_len = 0; // Reiniciar el puntero del búfer global
 
 	// 1. Datos GPS (Solo se agregan si hay satélites válidos)
@@ -411,6 +420,8 @@ uint8_t build_telemetry_payload(uint8_t gps_has_fix, uint8_t h, uint8_t m,
 	tlv_pack_16(0x0B, vbat_mv);
 	tlv_pack_8(0x0C, soc);
 	tlv_pack_16(0x0D, mag_angle);
+	tlv_pack_16(0x0E, temp_bat);   // 0x0E = temp batería DS18B20
+	tlv_pack_8(0x0F, heat_on);     // 0x0F = estado heater (1=ON, 0=OFF)
 
 	return lora_tx_len; // Devuelve el tamaño final del paquete
 }
@@ -445,6 +456,13 @@ int main(void) {
 	MX_USART2_UART_Init();
 	MX_ADC_Init();
 	/* USER CODE BEGIN 2 */
+	/* Forzar PB13 (heater) como push-pull, por si el .ioc lo dejó en open-drain */
+	GPIO_InitTypeDef heat_gpio = {0};
+	heat_gpio.Pin   = GPIO_PIN_13;
+	heat_gpio.Mode  = GPIO_MODE_OUTPUT_PP;      // Push-Pull
+	heat_gpio.Pull  = GPIO_NOPULL;
+	heat_gpio.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(GPIOB, &heat_gpio);
 	HAL_Delay(3000);
 	UART_Print("Inicializando sistema...\r\n");
 
@@ -459,9 +477,9 @@ int main(void) {
 
 	CMPS2_Init(&hi2c3);
 	MS5611_Init(&hi2c3, 0);
-	UART_Print("Scan completo.\r\n");
 
 	float temperature_sht21, hum;
+	uint8_t heat_on = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13);   // PB13 = heater
 	float gps_speed_kmh = 0.0f;
 	/* --- Inicialización BMI270 --- */
 	uint8_t chip_id = BMI270_ReadReg(REG_CHIP_ID);
@@ -503,11 +521,29 @@ int main(void) {
 	uint32_t last_gps_time = HAL_GetTick();
 	uint32_t last_imu_time = HAL_GetTick();
 	BMI270_Data_t imu;
+
+	  /* Habilitar el contador de ciclos DWT para delay_us */
+	  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	  DWT->CYCCNT = 0;
+	  DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk;
+
+	  /* Pin del DS18B20 como open-drain (pull-up externo) */
+	  GPIO_InitTypeDef ow_gpio = {0};
+	  ow_gpio.Pin   = OW_PIN;
+	  ow_gpio.Mode  = GPIO_MODE_OUTPUT_OD;
+	  ow_gpio.Pull  = GPIO_NOPULL;
+	  ow_gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+	  HAL_GPIO_Init(OW_PORT, &ow_gpio);
+
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
+
+		   // UART_Print("loop\r\n");     // <-- TEMPORAL, para diagnóstico
+		  //  HAL_Delay(200);              // <-- TEMPORAL, para no inundar
+
 		uint8_t trigger_telemetry = 0;
 		uint8_t gps_valid = 0;
 		/* Watchdog ISR */
@@ -635,12 +671,17 @@ int main(void) {
 
 			float voltaje = vbatFiltrado;
 			uint8_t soc = voltajeASoC(voltaje);
+		      float temp    = leerTemperaturaDS18B20();
+		      controlheat(temp);
+		      uint8_t heat_on = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13);
+
 			uint16_t vbat_mv = (uint16_t) (voltaje * 1000.0f);
 
 			build_telemetry_payload(gps_has_fix, h, m, s, lat_int, lon_int,
 					alt_int, speed_scaled, imu.acc_x, imu.acc_y, imu.acc_z,
 					imu.gyr_x, imu.gyr_y, imu.gyr_z, temp_sht_bits, hum_bits,
-					press_bits, vbat_mv, soc, mag_angle_scaled);
+					press_bits, vbat_mv, soc, mag_angle_scaled,
+					(int16_t)(temp * 100.0f), heat_on);
 
 			char separador[100] =
 					"------------------------------------------------------------------------\r\n";
@@ -662,42 +703,50 @@ int main(void) {
 			// 1. Verificamos si pasaron más de 2 segundos sin datos (Desconectado)
 			if (HAL_GetTick() - last_gps_time > 2000) {
 				snprintf(ascii_msg, sizeof(ascii_msg),
-						"[GPS] Tx desconectado\r\n"
-								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
-								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
-								"[MS5611] Temperatura: %.2f C | Presión: %.2f\r\n"
-								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n"
-								"VBAT: %.3f V | SOC: %u%%\r\n", ax_g, ay_g,
-						az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
-						temperature_sht21, hum, temperature_ms5611,
-						pressure_ms5611, measured_angle, direccion_viento,voltaje, soc);
+				        "[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
+				        "[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
+				        "[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
+				        "[MS5611] Temperatura: %.2f C | Presión: %.2f\r\n"
+				        "[CMPS2]  Ángulo: %.2f ° Dirreción: %s"
+				        "[DS18B20] Bateria: %.2f C | Heater: %s\r\n"
+				        "VBAT: %.3f V | SOC: %u%%\r\n",
+				        lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m, s,
+				        ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
+				        temperature_sht21, hum, temperature_ms5611,
+				        pressure_ms5611, measured_angle, direccion_viento,
+				        temp, heat_on ? "ON" : "OFF", voltaje, soc);
 			}
 			// 2. Verificamos si hay conexión y tenemos fix satelital
 			else if (gps_valid && fix_str[0] >= '1') {
 				snprintf(ascii_msg, sizeof(ascii_msg),
-						"[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
-								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
-								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
-								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n"
-								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n"
-								"VBAT: %.3f V | SOC: %u%%\r\n", lat_str, ns,
-						lon_str, ew, alt_str, gps_speed_kmh, h, m, s, ax_g,
-						ay_g, az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
-						temperature_sht21, hum, temperature_ms5611,
-						pressure_ms5611, measured_angle, direccion_viento,voltaje, soc);
+				        "[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
+				        "[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
+				        "[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
+				        "[MS5611] Temperatura: %.2f C | Presión: %.2f\r\n"
+				        "[CMPS2]  Ángulo: %.2f ° Dirreción: %s"
+				        "[DS18B20] Bateria: %.2f C | Heater: %s\r\n"
+				        "VBAT: %.3f V | SOC: %u%%\r\n",
+				        lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m, s,
+				        ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
+				        temperature_sht21, hum, temperature_ms5611,
+				        pressure_ms5611, measured_angle, direccion_viento,
+				        temp, heat_on ? "ON" : "OFF", voltaje, soc);
 			}
 			// 3. Hay conexión pero aún no hay fix
 			else {
 				snprintf(ascii_msg, sizeof(ascii_msg),
-						"[GPS] Buscando satelites...\r\n"
-								"[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
-								"[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
-								"[BMP280] Temperatura: %.2f C | Presión: %.2f\r\n"
-								"[CMPS2]  Ángulo: %.2f ° Dirreción: %s\r\n"
-								"VBAT: %.3f V | SOC: %u%%\r\n", ax_g, ay_g,
-						az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
-						temperature_sht21, hum, temperature_ms5611,
-						pressure_ms5611, measured_angle, direccion_viento,voltaje, soc);
+				        "[GPS] Lat: %s %s, Lon: %s %s, Alt: %s, Vel: %.2f km/h, Hora: %.2d:%.2d:%.2d\r\n"
+				        "[IMU] A: %+.2fg %+.2fg %+.2fg | G: %+.1fdps %+.1fdps %+.1fdps | T: %.1fC\r\n"
+				        "[SHT21] Temperatura: %.2f C | Humedad: %.2f %%\r\n"
+				        "[MS5611] Temperatura: %.2f C | Presión: %.2f\r\n"
+				        "[CMPS2]  Ángulo: %.2f ° Dirreción: %s"
+				        "[DS18B20] Bateria: %.2f C | Heater: %s\r\n"
+				        "VBAT: %.3f V | SOC: %u%%\r\n",
+				        lat_str, ns, lon_str, ew, alt_str, gps_speed_kmh, h, m, s,
+				        ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps, imu.temp_BMI270,
+				        temperature_sht21, hum, temperature_ms5611,
+				        pressure_ms5611, measured_angle, direccion_viento,
+				        temp, heat_on ? "ON" : "OFF", voltaje, soc);
 			}
 			char separador2[100] =
 					"------------------------------------------------------------------------\r\n\r\n";
@@ -752,6 +801,95 @@ void SystemClock_Config(void) {
 }
 
 /* USER CODE BEGIN 4 */
+// Delay de microsegundos con el contador de ciclos DWT (Cortex-M4)
+static inline void delay_us(uint32_t us)
+{
+    uint32_t inicio = DWT->CYCCNT;
+    uint32_t ticks  = us * (SystemCoreClock / 1000000U);
+    while ((DWT->CYCCNT - inicio) < ticks) { }
+}
+
+// Reset + presencia. Devuelve 1 si hay sensor, 0 si no contesta.
+static uint8_t ow_reset(void)
+{
+    uint8_t presencia;
+    OW_LOW();      delay_us(480);
+    OW_RELEASE();  delay_us(70);
+    presencia = !OW_READ();          // el sensor tira la línea = presencia
+    delay_us(410);
+    return presencia;
+}
+
+static void ow_write_bit(uint8_t bit)
+{
+    if (bit) { OW_LOW(); delay_us(6);  OW_RELEASE(); delay_us(64); }
+    else     { OW_LOW(); delay_us(60); OW_RELEASE(); delay_us(10); }
+}
+
+static uint8_t ow_read_bit(void)
+{
+    uint8_t bit;
+    OW_LOW();      delay_us(6);
+    OW_RELEASE();  delay_us(9);
+    bit = OW_READ();
+    delay_us(55);
+    return bit;
+}
+
+static void ow_write_byte(uint8_t byte)
+{
+    for (uint8_t i = 0; i < 8; i++) { ow_write_bit(byte & 0x01); byte >>= 1; }
+}
+
+static uint8_t ow_read_byte(void)
+{
+    uint8_t byte = 0;
+    for (uint8_t i = 0; i < 8; i++) {
+        byte >>= 1;
+        if (ow_read_bit()) byte |= 0x80;
+    }
+    return byte;
+}
+
+// Lee temperatura en °C. Devuelve -127.0 si no hay sensor.
+float leerTemperaturaDS18B20(void)
+{
+    if (!ow_reset()) return -127.0f;
+
+    __disable_irq();                 // timing estable durante los comandos
+    ow_reset();
+    ow_write_byte(0xCC);             // Skip ROM (un solo sensor en el bus)
+    ow_write_byte(0x44);             // Convert T
+    __enable_irq();
+
+    HAL_Delay(750);                  // conversión 12 bits = 750 ms máx
+
+    __disable_irq();
+    ow_reset();
+    ow_write_byte(0xCC);             // Skip ROM
+    ow_write_byte(0xBE);             // Read Scratchpad
+    uint8_t lsb = ow_read_byte();
+    uint8_t msb = ow_read_byte();
+    __enable_irq();
+
+    int16_t raw = (int16_t)((msb << 8) | lsb);
+    return (float)raw / 16.0f;       // cada LSB = 0.0625 °C = 1/16
+}
+
+void controlheat(float temp)
+{
+    static uint8_t heaterEncendido = 0;
+
+    if (!heaterEncendido && temp < TEMP_ON) {
+        heaterEncendido = 1;
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);   // PB13
+    } else if (heaterEncendido && temp > TEMP_OFF) {
+        heaterEncendido = 0;
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET); // PB13
+    }
+}
+
+
 /* USER CODE END 4 */
 
 /**

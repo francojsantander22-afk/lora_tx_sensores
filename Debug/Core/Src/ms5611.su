@@ -1,0 +1,6 @@
+../Core/Src/ms5611.c:20:13:MS5611_SendCommand	24	static
+../Core/Src/ms5611.c:26:17:MS5611_ReadADC	40	static
+../Core/Src/ms5611.c:35:17:MS5611_ReadPROM	40	static
+../Core/Src/ms5611.c:45:13:MS5611_SetupConstants	16	static
+../Core/Src/ms5611.c:63:6:MS5611_Init	32	static
+../Core/Src/ms5611.c:79:6:MS5611_Measure	80	static

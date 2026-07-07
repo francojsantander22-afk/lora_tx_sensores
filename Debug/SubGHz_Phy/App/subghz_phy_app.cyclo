@@ -1,0 +1,10 @@
+../SubGHz_Phy/App/subghz_phy_app.c:163:13:APP_Menu	21
+../SubGHz_Phy/App/subghz_phy_app.c:243:6:Aplicar_Nuevos_Parametros	1
+../SubGHz_Phy/App/subghz_phy_app.c:265:6:SubghzApp_Init	1
+../SubGHz_Phy/App/subghz_phy_app.c:351:13:OnTxDone	1
+../SubGHz_Phy/App/subghz_phy_app.c:369:13:OnRxDone	4
+../SubGHz_Phy/App/subghz_phy_app.c:409:13:OnTxTimeout	1
+../SubGHz_Phy/App/subghz_phy_app.c:419:13:OnRxTimeout	1
+../SubGHz_Phy/App/subghz_phy_app.c:432:13:OnRxError	1
+../SubGHz_Phy/App/subghz_phy_app.c:443:13:PingPong_Process	13
+../SubGHz_Phy/App/subghz_phy_app.c:549:13:OnledEvent	1
